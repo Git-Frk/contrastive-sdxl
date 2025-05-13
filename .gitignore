@@ -1,0 +1,35 @@
+# ======================
+# Ignored Folders
+# ======================
+# Python bytecode cache
+__pycache__/
+# Generated outputs (e.g., inference results, images)
+output/
+# Backup or reference code versions
+pre-modified versions/
+# Large datasets or input data
+data/
+# WandB logs and metadata
+wandb/
+# Python virtual environments
+venv/ 
+.env/
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+# ======================
+# Ignored Files
+# ======================
+# SLURM job output and scripts
+slurm-223652.out 
+submitjob.sh
+# Model checkpoints and weights
+*.pt
+*.pth
+*.pkl
+# Logs and temporary files
+*.log 
+*.tmp 
+*.swp 
+*.bak
+# macOS system files
+.DS_Store
