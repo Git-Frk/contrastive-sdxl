@@ -3,7 +3,7 @@ from torch import nn
 
 
 class UNetAttentionHook:
-    def __init__(self, model):
+    def __init__(self, model, nce_layers=None):
         """
         Hooks into SDXL-Turbo UNet's down_blocks to capture all attention maps
         from BasicTransformerBlock.attn1 modules across CrossAttnDownBlock2D layers.
@@ -21,6 +21,7 @@ class UNetAttentionHook:
         self.handles = []
         # Storage for collected feature maps per forward pass
         self.attn_features = []  # list of torch.Tensor [B, C, H, W]
+        self.nce_layers = nce_layers or list(range(100))  # fallback to all layers
         self._register_hooks()
 
 #     def _register_hooks(self):
