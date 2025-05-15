@@ -33,18 +33,18 @@ from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpai
 
 def train(args):
     
-    ds_plugin = DeepSpeedPlugin(
-        zero_stage=3,                       # ZeRO-3 parameter sharding  [oai_citation:3‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
-        offload_param_device="cpu",         # CPU-offload for parameters  [oai_citation:4‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
-        offload_optimizer_device="cpu",     # CPU-offload for optimizer state  [oai_citation:5‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
-        zero3_save_16bit_model=True,        # save FP16-sharded weights on disk  [oai_citation:6‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
-    )
+    # ds_plugin = DeepSpeedPlugin(
+    #     zero_stage=3,                       # ZeRO-3 parameter sharding  [oai_citation:3‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+    #     offload_param_device="cpu",         # CPU-offload for parameters  [oai_citation:4‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+    #     offload_optimizer_device="cpu",     # CPU-offload for optimizer state  [oai_citation:5‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+    #     zero3_save_16bit_model=True,        # save FP16-sharded weights on disk  [oai_citation:6‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+    # )
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         log_with=args.report_to,
-        mixed_precision="no",
-        deepspeed_plugin=ds_plugin
+        mixed_precision="no"
+        # deepspeed_plugin=ds_plugin
     )
     set_seed(args.seed)
 
