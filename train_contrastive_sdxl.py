@@ -43,7 +43,7 @@ def train(args):
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         log_with=args.report_to,
-        mixed_precision="no"
+        mixed_precision="bf16"
         # deepspeed_plugin=ds_plugin
     )
     set_seed(args.seed)
