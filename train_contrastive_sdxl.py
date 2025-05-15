@@ -35,7 +35,8 @@ def train(args):
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         log_with=args.report_to,
-        mixed_precision="bf16"
+        mixed_precision="bf16",
+        cpu=True
     )
     set_seed(args.seed)
 
