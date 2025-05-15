@@ -33,16 +33,16 @@ from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpai
 
 def train(args):
     
-ds_plugin = DeepSpeedPlugin(
-    zero_stage=3,                       # ZeRO-3 sharding
-    offload_param_device="cpu",         # offload parameters to host RAM
-    offload_optimizer_device="cpu",     # offload optimizer states to host RAM
-    offload_param_buffer=True,          # offload parameter *buffers* too
-    offload_optimizer_buffer=True,      # offload optimizer *buffers*
-    deepspeed_config={
-        "zero3_save_16bit_model": True,  # save sharded weights in fp16
-    },
-)
+    ds_plugin = DeepSpeedPlugin(
+        zero_stage=3,                       # ZeRO-3 sharding
+        offload_param_device="cpu",         # offload parameters to host RAM
+        offload_optimizer_device="cpu",     # offload optimizer states to host RAM
+        offload_param_buffer=True,          # offload parameter *buffers* too
+        offload_optimizer_buffer=True,      # offload optimizer *buffers*
+        deepspeed_config={
+            "zero3_save_16bit_model": True,  # save sharded weights in fp16
+        },
+    )
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -50,7 +50,6 @@ ds_plugin = DeepSpeedPlugin(
         mixed_precision="no",
         deepspeed_plugin=ds_plugin
     )
-    
     set_seed(args.seed)
 
     if accelerator.is_main_process:
