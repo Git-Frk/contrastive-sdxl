@@ -34,23 +34,10 @@ from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpai
 def train(args):
     
     ds_plugin = DeepSpeedPlugin(
-        zero_stage=3,                       # ZeRO-3 sharding
-        offload_param_device="cpu",         # offload parameters to host RAM
-        offload_optimizer_device="cpu",     # offload optimizer states to host RAM
-        deepspeed_config={                  # all zero-opt flags go here
-            "zero_optimization": {
-                "stage": 3,
-                "offload_param": {
-                    "device": "cpu",
-                    "pin_memory": True         
-                },
-                "offload_optimizer": {
-                    "device": "cpu",
-                    "pin_memory": True
-                },
-                "zero3_save_16bit_model": True # save your LoRA adapters in fp16
-            }
-        },
+        zero_stage=3,                       # ZeRO-3 parameter sharding  [oai_citation:3‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+        offload_param_device="cpu",         # CPU-offload for parameters  [oai_citation:4‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+        offload_optimizer_device="cpu",     # CPU-offload for optimizer state  [oai_citation:5‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
+        zero3_save_16bit_model=True,        # save FP16-sharded weights on disk  [oai_citation:6‡Hugging Face](https://huggingface.co/docs/accelerate/en/usage_guides/deepspeed)
     )
 
     accelerator = Accelerator(
