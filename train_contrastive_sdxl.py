@@ -37,10 +37,19 @@ def train(args):
         zero_stage=3,                       # ZeRO-3 sharding
         offload_param_device="cpu",         # offload parameters to host RAM
         offload_optimizer_device="cpu",     # offload optimizer states to host RAM
-        offload_param_buffer=True,          # offload parameter *buffers* too
-        offload_optimizer_buffer=True,      # offload optimizer *buffers*
-        deepspeed_config={
-            "zero3_save_16bit_model": True,  # save sharded weights in fp16
+        deepspeed_config={                  # all zero-opt flags go here
+            "zero_optimization": {
+                "stage": 3,
+                "offload_param": {
+                    "device": "cpu",
+                    "pin_memory": True         
+                },
+                "offload_optimizer": {
+                    "device": "cpu",
+                    "pin_memory": True
+                },
+                "zero3_save_16bit_model": True # save your LoRA adapters in fp16
+            }
         },
     )
 
