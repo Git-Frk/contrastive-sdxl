@@ -5,7 +5,7 @@ import torch
 import wandb
 from glob import glob
 import numpy as np
-from accelerate import Accelerator
+from accelerate import Accelerator, DeepSpeedPlugin
 from accelerate.utils import set_seed
 from PIL import Image
 from torchvision import transforms
@@ -32,11 +32,19 @@ from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpai
 
 
 def train(args):
+    
+    ds_plugin = DeepSpeedPlugin(
+    zero_stage=3,                                   # full parameter/shard offloading
+    offload_param_device="cpu",                     # offload parameters to host RAM
+    offload_optimizer_device="cpu",                 # offload optimizer states to host RAM
+    stage3_gather_fp16_weights_on_model_save=True   # stage3_gather_fp16_weights_on_model_save ensures your saved LoRA weights stay in fp16
+)
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         log_with=args.report_to,
         mixed_precision="no",
-        cpu=True
+        deepspeed_plugin=ds_plugin
     )
     set_seed(args.seed)
 
