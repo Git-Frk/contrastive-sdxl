@@ -34,7 +34,7 @@ def parse_args_unpaired_training():
                         help='scaling factor for normal, xavier and orthogonal.')
     parser.add_argument('--num_patches', type=int, default=256, help='number of patches per layer')
     parser.add_argument('--nce_layers', type=str, default='0,4,8,12,16,20',
-                        help='compute NCE loss on which layers')  # Need to decide
+                        help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
 
@@ -46,9 +46,9 @@ def parse_args_unpaired_training():
     parser.add_argument('--lambda_HDCE', type=float, default=1.0, help='weight for HDCE loss')
     parser.add_argument('--lambda_SRC', type=float, default=1.0, help='weight for SRC loss')
     parser.add_argument('--dce_idt', action='store_true')
-    parser.add_argument('--idt_start_epoch', type=int, default=5,
+    parser.add_argument('--idt_start_epoch', type=int, default=0,
                     help='Start computing identity loss only after this epoch.')
-    parser.add_argument('--idt_interval_steps', type=int, default=20,
+    parser.add_argument('--idt_interval_steps', type=int, default=0,
                     help='Frequency (in steps) to compute identity loss. 0 = every step.')
 
 
