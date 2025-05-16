@@ -46,10 +46,10 @@ def parse_args_unpaired_training():
     parser.add_argument('--lambda_HDCE', type=float, default=1.0, help='weight for HDCE loss')
     parser.add_argument('--lambda_SRC', type=float, default=1.0, help='weight for SRC loss')
     parser.add_argument('--dce_idt', action='store_true')
-    parser.add_argument('--idt_start_epoch', type=int, default=0,
-                    help='Start computing identity loss only after this epoch.')
-    parser.add_argument('--idt_interval_steps', type=int, default=0,
-                    help='Frequency (in steps) to compute identity loss. 0 = every step.')
+    # parser.add_argument('--idt_start_epoch', type=int, default=0,
+    #                 help='Start computing identity loss only after this epoch.')
+    # parser.add_argument('--idt_interval_steps', type=int, default=0,
+    #                 help='Frequency (in steps) to compute identity loss. 0 = every step.')
 
 
     parser.add_argument('--nce_T', type=float, default=0.07, help='temperature for NCE loss')

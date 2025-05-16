@@ -365,39 +365,39 @@ def train(args):
                 else:
                     loss_hDCE = 0.0
 
-#                 loss_hDCE_idt = 0
-#                 if args.dce_idt and args.lambda_HDCE > 0.0:
-#                     _, weight_idt = calculate_R_loss(src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
-#                                                      src_loss=src_loss, args=args, only_weight=True,
-#                                                      epoch=epoch)
-#                     loss_hDCE_idt = calculate_HDCE_loss(src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
-#                                                         nce_layers=nce_layers, weight=weight_idt)
-#                     #  In original CycleGAN-Turbo work these losses are seperate and not combined together
-#                     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
-#                 else:
-#                     total_hDCE_loss = loss_hDCE
-
-                # Compute identity loss if enabled and scheduled
-                compute_idt = (
-                    args.dce_idt
-                    and args.lambda_HDCE > 0.0
-                    and epoch >= args.idt_start_epoch
-                    and (args.idt_interval_steps == 0 or global_step % args.idt_interval_steps == 0)
-                )
-
-                if compute_idt:
-                    _, weight_idt = calculate_R_loss(
-                        src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
-                        src_loss=src_loss, args=args, only_weight=True, epoch=epoch
-                    )
-                    loss_hDCE_idt = calculate_HDCE_loss(
-                        src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
-                        nce_layers=nce_layers, weight=weight_idt
-                    )
+                loss_hDCE_idt = 0
+                if args.dce_idt and args.lambda_HDCE > 0.0:
+                    _, weight_idt = calculate_R_loss(src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
+                                                     src_loss=src_loss, args=args, only_weight=True,
+                                                     epoch=epoch)
+                    loss_hDCE_idt = calculate_HDCE_loss(src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
+                                                        nce_layers=nce_layers, weight=weight_idt)
+                    #  In original CycleGAN-Turbo work these losses are seperate and not combined together
                     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
                 else:
-                    loss_hDCE_idt = torch.tensor(0.0, device=img_a.device)
                     total_hDCE_loss = loss_hDCE
+
+                # # Compute identity loss if enabled and scheduled
+                # compute_idt = (
+                #     args.dce_idt
+                #     and args.lambda_HDCE > 0.0
+                #     and epoch >= args.idt_start_epoch
+                #     and (args.idt_interval_steps == 0 or global_step % args.idt_interval_steps == 0)
+                # )
+
+                # if compute_idt:
+                #     _, weight_idt = calculate_R_loss(
+                #         src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
+                #         src_loss=src_loss, args=args, only_weight=True, epoch=epoch
+                #     )
+                #     loss_hDCE_idt = calculate_HDCE_loss(
+                #         src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
+                #         nce_layers=nce_layers, weight=weight_idt
+                #     )
+                #     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
+                # else:
+                #     loss_hDCE_idt = torch.tensor(0.0, device=img_a.device)
+                #     total_hDCE_loss = loss_hDCE
 
 
                 # Backprop through contrastive losses
