@@ -396,7 +396,7 @@ def train(args):
                 fake_b_pool, sample_ids = netF(fake_b_features, args.num_patches, None)
                 real_a_pool, _ = netF(real_a_features, args.num_patches, sample_ids)
                 # idt_b_pool, _ = netF(idt_b_features, args.num_patches, sample_ids)
-                real_b_pool, _ = netF(real_b_features, args.num_patches, sample_ids)
+                # real_b_pool, _ = netF(real_b_features, args.num_patches, sample_ids)
 
                 # Semantic Consistency Relation Loss
                 loss_SRC, weight = calculate_R_loss(src=real_a_pool, tgt=fake_b_pool, nce_layers=nce_layers,
