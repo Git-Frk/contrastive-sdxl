@@ -254,9 +254,6 @@ def train(args):
                 img_b = batch["pixel_values_tgt"]
 
                 #Debug block: ----------------------------------------------------------------------------------------------
-                img_a, img_b = batch["A"], batch["B"]
-
-                # Add:
                 for name, img in [("A", img_a), ("B", img_b)]:
                     if torch.isnan(img).any() or torch.isinf(img).any():
                         print(f"⚠️ NaNs/Infs in input {name}:",
