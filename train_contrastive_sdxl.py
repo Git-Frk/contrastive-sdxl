@@ -285,7 +285,7 @@ def train(args):
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(lat_a).any() or torch.isinf(lat_a).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(lat_a).sum().item(), torch.isinf(lat_a).sum().item())
-                print("Latent range:", lat_a.min().item(), lat_a.max().item())
+                print("lat_a range:", lat_a.min().item(), lat_a.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 # 2) Denoise once at the same time extract self-attention feature maps from real_A (source) image.
@@ -304,7 +304,7 @@ def train(args):
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(fake_lat_a).any() or torch.isinf(fake_lat_a).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(fake_lat_a).sum().item(), torch.isinf(fake_lat_a).sum().item())
-                print("Latent range:", fake_lat_a.min().item(), fake_lat_a.max().item())
+                print("fake_lat_a range:", fake_lat_a.min().item(), fake_lat_a.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 # 3) decode back to pixels
@@ -316,7 +316,7 @@ def train(args):
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(lat_b).any() or torch.isinf(lat_b).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(lat_b).sum().item(), torch.isinf(lat_b).sum().item())
-                print("Latent range:", lat_b.min().item(), lat_b.max().item())
+                print("lat_b range:", lat_b.min().item(), lat_b.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 # 2) Denoise once at the same time extract self-attention feature maps from real B image..
@@ -334,7 +334,7 @@ def train(args):
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(idt_lat_b).any() or torch.isinf(idt_lat_b).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(idt_lat_b).sum().item(), torch.isinf(idt_lat_b).sum().item())
-                print("Latent range:", idt_lat_b.min().item(), idt_lat_b.max().item())
+                print("idt_lat_b range:", idt_lat_b.min().item(), idt_lat_b.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 # 3) decode back to pixels
@@ -351,13 +351,13 @@ def train(args):
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(lat_fake_b).any() or torch.isinf(lat_fake_b).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(lat_fake_b).sum().item(), torch.isinf(lat_fake_b).sum().item())
-                print("Latent range:", lat_fake_b.min().item(), lat_fake_b.max().item())
+                print("lat_fake_b range:", lat_fake_b.min().item(), lat_fake_b.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 #Debug block: ----------------------------------------------------------------------------------------------
                 if torch.isnan(lat_idt_b).any() or torch.isinf(lat_idt_b).any():
                     print("⚠️ Bad latents from VAE:", torch.isnan(lat_idt_b).sum().item(), torch.isinf(lat_idt_b).sum().item())
-                print("Latent range:", lat_idt_b.min().item(), lat_idt_b.max().item())
+                print("lat_idt_b range:", lat_idt_b.min().item(), lat_idt_b.max().item())
                  # ----------------------------------------------------------------------------------------------------------
 
                 # Extract self-attention feature maps from fake_B (translated) image.
