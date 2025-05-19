@@ -246,7 +246,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
           timesteps:      (B,) int tensor of timesteps (all equal here)
           prompt_embeds:  (B, N, D) text encoder hidden states
           pooled_embeds:  (B, Dp) text encoder pooled states
-           time_ids:      information on image size, crop size and the target/output shape(512x412)
+          time_ids:       information on image size, crop size and the target/output shape(512x512)
           attn_hook:      an instance of your UNetAttentionHook
 
         Returns:
