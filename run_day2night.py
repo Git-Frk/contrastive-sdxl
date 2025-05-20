@@ -17,6 +17,7 @@ def main():
       --lambda_gan=0.5 \
       --lambda_HDCE=1.0 \
       --lambda_SRC=1.0 \
+      --dce_idt \
       --enable_xformers_memory_efficient_attention \
       --gradient_checkpointing \
       --report_to="wandb" \
