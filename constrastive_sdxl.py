@@ -258,6 +258,10 @@ class ContrastiveSDXL_Turbo(nn.Module):
         # 1) Clear any previous features in the hook
         attn_hook.clear()
 
+        latents = torch.rand_like(latents)
+
+        latents = scheduler.add_noise(latents, noise, timesteps)
+
         # 2) Run the UNet forward and capture the .sample output
         model_out = unet(
             latents, timesteps,
