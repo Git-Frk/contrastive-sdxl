@@ -92,8 +92,8 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         # Initialize VAE with LoRA adapters and skip connection layers
         vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae")
-        vae.encoder.forward = my_vae_encoder_fwd.__get__(vae.encoder, vae.encoder.__class__)
-        vae.decoder.forward = my_vae_decoder_fwd.__get__(vae.decoder, vae.decoder.__class__)
+        vae.encoder.forward = custom_vae_encoder_fwd.__get__(vae.encoder, vae.encoder.__class__)
+        vae.decoder.forward = custom_vae_decoder_fwd.__get__(vae.decoder, vae.decoder.__class__)
         # add the skip connection convs
         vae.decoder.skip_conv_1 = torch.nn.Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False).cuda()
         vae.decoder.skip_conv_2 = torch.nn.Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1), bias=False).cuda()
@@ -153,11 +153,11 @@ class ContrastiveSDXL_Turbo(nn.Module):
         )
 
         # Add adapters individually only if they don't exist
-        if not hasattr(self.unet, "peft_config") or "default_encoder" not in unet.peft_config:
+        if not hasattr(self.unet, "peft_config") or "default_encoder" not in self.unet.peft_config:
             self.unet.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
-        if not hasattr(self.unet, "peft_config") or "default_decoder" not in unet.peft_config:
+        if not hasattr(self.unet, "peft_config") or "default_decoder" not in self.unet.peft_config:
             self.unet.add_adapter(lora_conf_decoder, adapter_name="default_decoder")
-        if not hasattr(self.unet, "peft_config") or "default_others" not in unet.peft_config:
+        if not hasattr(self.unet, "peft_config") or "default_others" not in self.unet.peft_config:
             self.unet.add_adapter(lora_conf_others, adapter_name="default_others")
 
         # Load LoRA weights for encoder adapter
@@ -189,7 +189,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
             target_modules=sd["vae_lora_target_modules"]
         )
 
-        if not hasattr(self.vae, "peft_config") or "vae_skip" not in vae.peft_config:
+        if not hasattr(self.vae, "peft_config") or "vae_skip" not in self.vae.peft_config:
             self.vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
 
         #         self.vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
