@@ -258,7 +258,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
         # 1) Clear any previous features in the hook
         attn_hook.clear()
 
-        latents = torch.rand_like(latents)
+        noise = torch.rand_like(latents)
 
         latents = scheduler.add_noise(latents, noise, timesteps)
 
