@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
+from torchvision.transforms import RandomCrop
 import torchvision.transforms.functional as F
 from glob import glob
 

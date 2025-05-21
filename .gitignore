@@ -33,3 +33,5 @@ submitjob.sh
 *.bak
 # macOS system files
 .DS_Store
+# Jupyter notebooks to ignore
+debugger.ipynb
