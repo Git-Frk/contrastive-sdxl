@@ -9,7 +9,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 
 
-def initialize_unet(rank, return_lora_module_names=False, torch_dtype=torch.float16):
+def initialize_unet(rank, return_lora_module_names=False, torch_dtype=torch.float32):
     """
     Initializes the SDXL-Turbo UNet with LoRA adapters for encoder, decoder, and other modules.
     Collects and categorizes parameter names for fine-tuning using LoRA.

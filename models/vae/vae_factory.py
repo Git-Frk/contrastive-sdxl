@@ -10,12 +10,12 @@ from peft.utils import get_peft_model_state_dict
 from custom_vae_forward import custom_vae_encoder_fwd, custom_vae_decoder_fwd
 
 
-def initialize_vae(rank=8, return_lora_module_names=False, torch_dtype=torch.float16):
+def initialize_vae(rank=8, return_lora_module_names=False, torch_dtype=torch.float32):
     """
     Initializes the VAE from SDXL-Turbo with LoRA adapters and custom skip connections.
     Also overrides the encoder and decoder forward methods with custom ones.
     """
-    vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae", torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae", torch_dtype=torch_dtype)
     vae.requires_grad_(False)
 
     # Patch forward methods

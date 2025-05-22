@@ -165,10 +165,6 @@ def train(args):
 
         fixed_prompt_embeds = torch.cat([out_1.hidden_states[-2], out_2.hidden_states[-2]], dim=-1)
         fixed_pooled_embeds = out_2[0]
-        
-    fixed_prompt_embeds = fixed_prompt_embeds.to(dtype=torch.bfloat16)
-    fixed_pooled_embeds = fixed_pooled_embeds.to(dtype=torch.bfloat16)
-
 
     # Optional: free up memory
     del text_encoder_1, text_encoder_2, tokenizer_1, tokenizer_2
@@ -253,13 +249,13 @@ def train(args):
                 img_a = batch["pixel_values_src"]
                 img_b = batch["pixel_values_tgt"]
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                for name, img in [("A", img_a), ("B", img_b)]:
-                    if torch.isnan(img).any() or torch.isinf(img).any():
-                        print(f"⚠️ NaNs/Infs in input {name}:",
-                            torch.isnan(img).sum().item(), torch.isinf(img).sum().item())
-                    print(f"🔍 Range {name}: min {img.min().item():.4f}, max {img.max().item():.4f}")
-                # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # for name, img in [("A", img_a), ("B", img_b)]:
+                #     if torch.isnan(img).any() or torch.isinf(img).any():
+                #         print(f"⚠️ NaNs/Infs in input {name}:",
+                #             torch.isnan(img).sum().item(), torch.isinf(img).sum().item())
+                #     print(f"🔍 Range {name}: min {img.min().item():.4f}, max {img.max().item():.4f}")
+                # # ----------------------------------------------------------------------------------------------------------
 
                 bsz = img_a.shape[0]
 
@@ -282,11 +278,11 @@ def train(args):
                 # 1) encode img_a
                 lat_a = ContrastiveSDXL_Turbo.encode(img_a, vae_enc)
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(lat_a).any() or torch.isinf(lat_a).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(lat_a).sum().item(), torch.isinf(lat_a).sum().item())
-                print("lat_a range:", lat_a.min().item(), lat_a.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(lat_a).any() or torch.isinf(lat_a).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_a).sum().item(), torch.isinf(lat_a).sum().item())
+                # print("lat_a range:", lat_a.min().item(), lat_a.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
                 # 2) Denoise once at the same time extract self-attention feature maps from real_A (source) image.
                 # These are intermediate features collected from down-block attention modules in the UNet,
@@ -301,11 +297,11 @@ def train(args):
                                                                                         nce_layers=nce_layers
                                                                                        )
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(fake_lat_a).any() or torch.isinf(fake_lat_a).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(fake_lat_a).sum().item(), torch.isinf(fake_lat_a).sum().item())
-                print("fake_lat_a range:", fake_lat_a.min().item(), fake_lat_a.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(fake_lat_a).any() or torch.isinf(fake_lat_a).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(fake_lat_a).sum().item(), torch.isinf(fake_lat_a).sum().item())
+                # print("fake_lat_a range:", fake_lat_a.min().item(), fake_lat_a.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
                 # 3) decode back to pixels
                 fake_b = ContrastiveSDXL_Turbo.decode(fake_lat_a, vae_dec)
@@ -313,11 +309,11 @@ def train(args):
                 # 1) encode img_a
                 lat_b = ContrastiveSDXL_Turbo.encode(img_b, vae_enc)
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(lat_b).any() or torch.isinf(lat_b).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(lat_b).sum().item(), torch.isinf(lat_b).sum().item())
-                print("lat_b range:", lat_b.min().item(), lat_b.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(lat_b).any() or torch.isinf(lat_b).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_b).sum().item(), torch.isinf(lat_b).sum().item())
+                # print("lat_b range:", lat_b.min().item(), lat_b.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
                 # 2) Denoise once at the same time extract self-attention feature maps from real B image..
 
@@ -331,11 +327,11 @@ def train(args):
                                                                                        nce_layers=nce_layers
                                                                                        )
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(idt_lat_b).any() or torch.isinf(idt_lat_b).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(idt_lat_b).sum().item(), torch.isinf(idt_lat_b).sum().item())
-                print("idt_lat_b range:", idt_lat_b.min().item(), idt_lat_b.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(idt_lat_b).any() or torch.isinf(idt_lat_b).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(idt_lat_b).sum().item(), torch.isinf(idt_lat_b).sum().item())
+                # print("idt_lat_b range:", idt_lat_b.min().item(), idt_lat_b.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
                 # 3) decode back to pixels
                 idt_b = ContrastiveSDXL_Turbo.decode(idt_lat_b, vae_dec)
@@ -348,17 +344,17 @@ def train(args):
                 lat_fake_b = ContrastiveSDXL_Turbo.encode(fake_b, vae_enc)
                 lat_idt_b = ContrastiveSDXL_Turbo.encode(idt_b, vae_enc)
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(lat_fake_b).any() or torch.isinf(lat_fake_b).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(lat_fake_b).sum().item(), torch.isinf(lat_fake_b).sum().item())
-                print("lat_fake_b range:", lat_fake_b.min().item(), lat_fake_b.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(lat_fake_b).any() or torch.isinf(lat_fake_b).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_fake_b).sum().item(), torch.isinf(lat_fake_b).sum().item())
+                # print("lat_fake_b range:", lat_fake_b.min().item(), lat_fake_b.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
-                #Debug block: ----------------------------------------------------------------------------------------------
-                if torch.isnan(lat_idt_b).any() or torch.isinf(lat_idt_b).any():
-                    print("⚠️ Bad latents from VAE:", torch.isnan(lat_idt_b).sum().item(), torch.isinf(lat_idt_b).sum().item())
-                print("lat_idt_b range:", lat_idt_b.min().item(), lat_idt_b.max().item())
-                 # ----------------------------------------------------------------------------------------------------------
+                # #Debug block: ----------------------------------------------------------------------------------------------
+                # if torch.isnan(lat_idt_b).any() or torch.isinf(lat_idt_b).any():
+                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_idt_b).sum().item(), torch.isinf(lat_idt_b).sum().item())
+                # print("lat_idt_b range:", lat_idt_b.min().item(), lat_idt_b.max().item())
+                #  # ----------------------------------------------------------------------------------------------------------
 
                 # Extract self-attention feature maps from fake_B (translated) image.
                 fake_b_features = attn_hook.extract_attention_features(latent=lat_fake_b, unet=unet, timestep=timesteps,
