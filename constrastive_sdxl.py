@@ -3,7 +3,7 @@ import sys
 import copy
 import torch
 import torch.nn as nn
-from transformers import AutoTokenizer, CLIPTextModel
+from transformers import AutoTokenizer, CLIPTextModel, CLIPTextModelWithProjection
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
@@ -85,7 +85,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         # Load both text encoders
         self.text_encoder_1 = CLIPTextModel.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder").cuda()
-        self.text_encoder_2 = CLIPTextModel.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder_2").cuda()
+        self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder_2").cuda()
 
         # One-step DDIM scheduler
         self.sched = make_1step_sched()
@@ -107,7 +107,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         # Load from pretrained checkpoint if provided
         state_dict = torch.load(pretrained_path)
-        self.load_state_dict(state_dict)
+        self.load_ckpt_from_state_dict(state_dict)
         # Optional: set default caption prompt
         self.caption = "Driving at night."
         self.timesteps = torch.tensor([999], device="cuda").long()
@@ -255,14 +255,14 @@ class ContrastiveSDXL_Turbo(nn.Module):
         """
         B = latents.shape[0]
         
-        # 1) Clear any previous features in the hook
+        # Clear any previous features in the hook
         attn_hook.clear()
 
-        noise = torch.rand_like(latents)
+        # noise = torch.rand_like(latents)
 
-        latents = scheduler.add_noise(latents, noise, timesteps)
+        # latents = scheduler.add_noise(latents, noise, timesteps)
 
-        # 2) Run the UNet forward and capture the .sample output
+        # Run the UNet forward and capture the .sample output
         model_out = unet(
             latents, timesteps,
             encoder_hidden_states=prompt_embeds,
@@ -271,15 +271,14 @@ class ContrastiveSDXL_Turbo(nn.Module):
         )
         noise_pred = model_out.sample  # shape (B, C, H', W')
 
-        # 3) Scheduler one-step update in *batch* form
+        # Scheduler one-step update in *batch* form
         denoised = torch.stack([
             scheduler.step(noise_pred[i], timesteps[i], latents[i], return_dict=True).prev_sample
             for i in range(B)
         ])
 
-        # 4) Pull out all the attention feature maps the hook captured
-        all_feats = attn_hook.get_and_clear_features()
-        features = [all_feats[i] for i in nce_layers if 0 <= i < len(all_feats)]
+        # Pull out the attention feature maps the hook captured
+        features = attn_hook.get_and_clear_features()
 
         return denoised, features
 
@@ -339,119 +338,119 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         return params_gen
 
-    # ===================================================================================================================
+    # ==================================================Inference Code=============================================================
 
-    # @staticmethod
-    # def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, text_emb, pooled_emb, time_ids):
-    #     """
-    #     Forward pass through the VAE encoder, UNet, and VAE decoder.
-    #
-    #     Args:
-    #         x (torch.Tensor): Input images (B, C, H, W)
-    #         vae_enc (VAE_encode): VAE encoder wrapper
-    #         unet (UNet2DConditionModel): LoRA-enhanced UNet model
-    #         vae_dec (VAE_decode): VAE decoder wrapper
-    #         sched: 1-step scheduler (e.g., DDIM scheduler)
-    #         timesteps (torch.LongTensor): Timestep tensor, shape (B,)
-    #         text_emb (torch.Tensor): Text embedding (B, T, D) for conditioning
-    #
-    #     Returns:
-    #         torch.Tensor: Reconstructed / translated image (B, C, H, W)
-    #     """
-    #     B = x.shape[0]
-    #
-    #     # Encode image to latent space using VAE
-    #     x_enc = vae_enc(x).to(x.dtype)
-    #
-    #     # Predict noise residual using UNet
-    #     model_pred = unet(
-    #         x_enc, timesteps,
-    #         encoder_hidden_states=text_emb,
-    #         added_cond_kwargs={"text_embeds": pooled_emb,
-    #                            "time_ids": time_ids},
-    #     ).sample
-    #
-    #     # Perform 1-step denoising using DDIM scheduler
-    #     x_out = torch.stack([
-    #         sched.step(model_pred[i], timesteps[i], x_enc[i], return_dict=True).prev_sample
-    #         for i in range(B)
-    #     ])
-    #
-    #     # Decode latent back to image space using VAE
-    #     x_out_decoded = vae_dec(x_out)
-    #
-    #     return x_out_decoded
-    #
-    # def forward(self, x_t, caption=None, caption_emb=None, time_ids=None):
-    #     """
-    #     SDXL-Turbo forward pass with dual-tokenizer and dual-encoder prompt processing NOTE: only used in inference.py file.
-    #
-    #     This method performs the following:
-    #     - Encodes a caption using both SDXL-Turbo tokenizers and text encoders.
-    #     - Extracts token-level embeddings (from penultimate hidden states) and concatenates them.
-    #     - Extracts a pooled/global embedding (from text_encoder_2 output) for global context.
-    #     - Feeds the resulting embeddings to the image-to-image translation pipeline.
-    #
-    #     Args:
-    #         x_t (torch.Tensor): Input image tensor of shape (B, C, H, W).
-    #         caption (str, optional): Text prompt to condition the generation. Ignored if `caption_emb` is provided.
-    #         caption_emb (Tuple[torch.Tensor, torch.Tensor], optional):
-    #             Precomputed (prompt_embeds, pooled_prompt_embeds).
-    #             Use this to skip text encoding and reuse previous embeddings.
-    #
-    #     Returns:
-    #         torch.Tensor: Output image after translation, same shape as input (B, C, H, W).
-    #     """
-    #
-    #     if caption_emb is not None:
-    #         # Use provided precomputed embeddings: (token-level, pooled-level)
-    #         prompt_embeds, pooled_embeds = caption_emb
-    #     else:
-    #         # If no caption string is passed, fall back to default caption set at init
-    #         if caption is None:
-    #             assert self.caption is not None, "No caption provided and no default set."
-    #             caption = self.caption
-    #
-    #         # Tokenize the caption using both SDXL tokenizers
-    #         tokens_1 = self.tokenizer_1(
-    #             caption,
-    #             max_length=self.tokenizer_1.model_max_length,
-    #             padding="max_length",
-    #             truncation=True,
-    #             return_tensors="pt"
-    #         ).input_ids.to(x_t.device)
-    #
-    #         tokens_2 = self.tokenizer_2(
-    #             caption,
-    #             max_length=self.tokenizer_2.model_max_length,
-    #             padding="max_length",
-    #             truncation=True,
-    #             return_tensors="pt"
-    #         ).input_ids.to(x_t.device)
-    #
-    #         # Get encoder outputs with all hidden states
-    #         out_1 = self.text_encoder_1(tokens_1, output_hidden_states=True)
-    #         out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
-    #
-    #         # Extract the penultimate hidden state from each encoder and concatenate
-    #         # This is the official SDXL behavior for conditioning on token-level features
-    #         prompt_embeds = torch.cat([
-    #             out_1.hidden_states[-2],  # text_encoder_1 hidden state
-    #             out_2.hidden_states[-2],  # text_encoder_2 hidden state
-    #         ], dim=-1).detach().clone()
-    #
-    #         # Extract pooled embedding from text_encoder_2 (standard SDXL global summary)
-    #         pooled_embeds = out_2[0]  # shape: (B, D)
-    #
-    #     # Run full pipeline: VAE encode → UNet → Scheduler step → VAE decode
-    #     return self.forward_with_networks(
-    #         x_t,
-    #         self.vae_enc,
-    #         self.unet,
-    #         self.vae_dec,
-    #         self.sched,
-    #         self.timesteps,
-    #         prompt_embeds,
-    #         pooled_embeds,
-    #         time_ids
-    #     )
+    @staticmethod
+    def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, text_emb, pooled_emb, time_ids):
+        """
+        Forward pass through the VAE encoder, UNet, and VAE decoder.
+    
+        Args:
+            x (torch.Tensor): Input images (B, C, H, W)
+            vae_enc (VAE_encode): VAE encoder wrapper
+            unet (UNet2DConditionModel): LoRA-enhanced UNet model
+            vae_dec (VAE_decode): VAE decoder wrapper
+            sched: 1-step scheduler (e.g., DDIM scheduler)
+            timesteps (torch.LongTensor): Timestep tensor, shape (B,)
+            text_emb (torch.Tensor): Text embedding (B, T, D) for conditioning
+    
+        Returns:
+            torch.Tensor: Reconstructed / translated image (B, C, H, W)
+        """
+        B = x.shape[0]
+    
+        # Encode image to latent space using VAE
+        x_enc = vae_enc(x).to(x.dtype)
+    
+        # Predict noise residual using UNet
+        model_pred = unet(
+            x_enc, timesteps,
+            encoder_hidden_states=text_emb,
+            added_cond_kwargs={"text_embeds": pooled_emb,
+                               "time_ids": time_ids},
+        ).sample
+    
+        # Perform 1-step denoising using DDIM scheduler
+        x_out = torch.stack([
+            sched.step(model_pred[i], timesteps[i], x_enc[i], return_dict=True).prev_sample
+            for i in range(B)
+        ])
+    
+        # Decode latent back to image space using VAE
+        x_out_decoded = vae_dec(x_out)
+    
+        return x_out_decoded
+    
+    def forward(self, x_t, caption=None, caption_emb=None, time_ids=None):
+        """
+        SDXL-Turbo forward pass with dual-tokenizer and dual-encoder prompt processing NOTE: only used in inference.py file.
+    
+        This method performs the following:
+        - Encodes a caption using both SDXL-Turbo tokenizers and text encoders.
+        - Extracts token-level embeddings (from penultimate hidden states) and concatenates them.
+        - Extracts a pooled/global embedding (from text_encoder_2 output) for global context.
+        - Feeds the resulting embeddings to the image-to-image translation pipeline.
+    
+        Args:
+            x_t (torch.Tensor): Input image tensor of shape (B, C, H, W).
+            caption (str, optional): Text prompt to condition the generation. Ignored if `caption_emb` is provided.
+            caption_emb (Tuple[torch.Tensor, torch.Tensor], optional):
+                Precomputed (prompt_embeds, pooled_prompt_embeds).
+                Use this to skip text encoding and reuse previous embeddings.
+    
+        Returns:
+            torch.Tensor: Output image after translation, same shape as input (B, C, H, W).
+        """
+    
+        if caption_emb is not None:
+            # Use provided precomputed embeddings: (token-level, pooled-level)
+            prompt_embeds, pooled_embeds = caption_emb
+        else:
+            # If no caption string is passed, fall back to default caption set at init
+            if caption is None:
+                assert self.caption is not None, "No caption provided and no default set."
+                caption = self.caption
+    
+            # Tokenize the caption using both SDXL tokenizers
+            tokens_1 = self.tokenizer_1(
+                caption,
+                max_length=self.tokenizer_1.model_max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt"
+            ).input_ids.to(x_t.device)
+    
+            tokens_2 = self.tokenizer_2(
+                caption,
+                max_length=self.tokenizer_2.model_max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt"
+            ).input_ids.to(x_t.device)
+
+            # Get encoder outputs with all hidden states
+            out_1 = self.text_encoder_1(tokens_1, output_hidden_states=True)
+            out_2 = self.text_encoder_2(tokens_2, output_hidden_states=True)
+
+            # Extract the penultimate hidden state from each encoder and concatenate
+            # This is the official SDXL behavior for conditioning on token-level features
+            prompt_embeds = torch.cat([
+                out_1.hidden_states[-2],  # text_encoder_1 hidden state
+                out_2.hidden_states[-2],  # text_encoder_2 hidden state
+            ], dim=-1).detach().clone()
+    
+            # Extract pooled embedding from text_encoder_2 (standard SDXL global summary)
+            pooled_embeds = out_2[0]  # shape: (B, D)
+    
+        # Run full pipeline: VAE encode → UNet → Scheduler step → VAE decode
+        return self.forward_with_networks(
+            x_t,
+            self.vae_enc,
+            self.unet,
+            self.vae_dec,
+            self.sched,
+            self.timesteps,
+            prompt_embeds,
+            pooled_embeds,
+            time_ids
+        )

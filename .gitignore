@@ -35,3 +35,8 @@ submitjob.sh
 .DS_Store
 # Jupyter notebooks to ignore
 debugger.ipynb
+# Python files
+inference_day2night.py
+# images
+test1.png
+test2.png

@@ -28,9 +28,9 @@ class SRC_Loss(nn.Module):
 
     def forward(self, feat_q, feat_k, only_weight=False, epoch=None):
         '''
-        :param feat_q: target
-        :param feat_k: source
-        :return: SRC loss, weights for hDCE
+            param feat_q: target
+            param feat_k: source
+            return: SRC loss, weights for hDCE
         '''
 
         batchSize = feat_q.shape[0]

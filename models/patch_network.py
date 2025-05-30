@@ -81,14 +81,12 @@ class PatchSampleF(nn.Module):
         self.init_type = init_type
         self.init_gain = init_gain
 
-    #         self.gpu_ids = gpu_ids
-
     def create_mlp(self, feats):
+        # print(f"[PatchSampleF] Creating MLPs for {len(feats)} attention features...") # debug statement
         for mlp_id, feat in enumerate(feats):
             input_nc = feat.shape[1]
+            # print(f" → Creating MLP {mlp_id} for input_nc={input_nc}") # debug statement
             mlp = nn.Sequential(*[nn.Linear(input_nc, self.nc), nn.ReLU(), nn.Linear(self.nc, self.nc)])
-            #             if len(self.gpu_ids) > 0:
-            #                 mlp.cuda()
             setattr(self, 'mlp_%d' % mlp_id, mlp)
         init_net(self, self.init_type, self.init_gain)
         self.mlp_init = True
@@ -103,8 +101,7 @@ class PatchSampleF(nn.Module):
             feat_reshape = feat.permute(0, 2, 3, 1).flatten(1, 2)
             if num_patches > 0:
                 if patch_ids is not None:
-                    patch_id = patch_ids[
-                        feat_id]  # used to sample the corresponding positive patches from the real image(s)
+                    patch_id = patch_ids[feat_id]  # used to sample the corresponding positive patches from the real image(s)
                 else:
                     patch_id = torch.randperm(feat_reshape.shape[1], device=feats[0].device)
                     patch_id = patch_id[:int(min(num_patches, patch_id.shape[0]))]  # .to(patch_ids.device)
