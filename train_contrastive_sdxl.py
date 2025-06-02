@@ -77,9 +77,6 @@ def train(args):
     src_loss = SRC_Loss(args)
     hDCE_loss = PatchHDCELoss(args)
 
-    #     if args.enable_xformers_memory_efficient_attention:
-    #         unet.enable_xformers_memory_efficient_attention()
-
     # Attempt to turn on xFormers only if installed
     if is_xformers_available():
         try:
@@ -152,12 +149,6 @@ def train(args):
         truncation=True,
         return_tensors="pt"
     ).input_ids.to(accelerator.device)
-
-#     out_1 = text_encoder_1(fixed_prompt_tokens_1, output_hidden_states=True)
-#     out_2 = text_encoder_2(fixed_prompt_tokens_2, output_hidden_states=True)
-
-#     fixed_prompt_embeds = torch.cat([out_1.hidden_states[-2], out_2.hidden_states[-2]], dim=-1).detach().clone()
-#     fixed_pooled_embeds = out_2[0].detach().clone()
 
     with torch.no_grad():
         out_1 = text_encoder_1(fixed_prompt_tokens_1, output_hidden_states=True)
@@ -271,6 +262,28 @@ def train(args):
                     device=img_a.device
                 ).long()
 
+                # First-time initialization of netF (MLP heads) and its optimizer
+                if epoch == 0 and global_step == 0:
+                    optimizer_netF = data_dependent_initialize(data=img_a, netF=netF, unet=unet, vae_enc=vae_enc,
+                                                               attn_hook=attn_hook, nce_layers=nce_layers, args=args,
+                                                               accelerator=accelerator,
+                                                               timestep=timesteps,
+                                                               prompt_embeds=fixed_prompt_embeds,
+                                                               pooled_embeds=fixed_pooled_embeds,
+                                                               time_ids=time_ids_src
+                                                               )
+                    lr_scheduler_netF = get_scheduler(
+                        args.lr_scheduler_netF,
+                        optimizer=optimizer_netF,
+                        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
+                        num_training_steps=args.max_train_steps * accelerator.num_processes,
+                        num_cycles=args.lr_num_cycles,
+                        power=args.lr_power
+                    )
+
+                    optimizer_netF, lr_scheduler_netF = accelerator.prepare(optimizer_netF, lr_scheduler_netF)
+
+
                 # ======================================================================================================
                 # ---------------------------PW-CONTRASTIVE LOSS and Generator Objective (GAN)--------------------------
                 # ======================================================================================================
@@ -296,7 +309,6 @@ def train(args):
                                                                                         attn_hook=attn_hook,
                                                                                         nce_layers=nce_layers
                                                                                        )
-
                 # #Debug block: ----------------------------------------------------------------------------------------------
                 # if torch.isnan(fake_lat_a).any() or torch.isinf(fake_lat_a).any():
                 #     print("⚠️ Bad latents from VAE:", torch.isnan(fake_lat_a).sum().item(), torch.isinf(fake_lat_a).sum().item())
@@ -368,26 +380,6 @@ def train(args):
                                                                       pooled_embed=fixed_pooled_embeds,
                                                                       time_ids=time_ids_idt_b, nce_layers=nce_layers)
 
-                # First-time initialization of netF (MLP heads) and its optimizer
-                if epoch == 0 and global_step == 0:
-                    optimizer_netF = data_dependent_initialize(data=img_a, netF=netF, unet=unet, vae_enc=vae_enc,
-                                                               attn_hook=attn_hook, nce_layers=nce_layers, args=args,
-                                                               accelerator=accelerator,
-                                                               prompt_embeds=fixed_prompt_embeds,
-                                                               pooled_embeds=fixed_pooled_embeds,
-                                                               time_ids=time_ids_src
-                                                               )
-                    lr_scheduler_netF = get_scheduler(
-                        args.lr_scheduler_netF,
-                        optimizer=optimizer_netF,
-                        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
-                        num_training_steps=args.max_train_steps * accelerator.num_processes,
-                        num_cycles=args.lr_num_cycles,
-                        power=args.lr_power
-                    )
-
-                    optimizer_netF, lr_scheduler_netF = accelerator.prepare(optimizer_netF, lr_scheduler_netF)
-
                 # Sample contrastive patches using netF (MLPs)
                 fake_b_pool, sample_ids = netF(fake_b_features, args.num_patches, None)
                 real_a_pool, _ = netF(real_a_features, args.num_patches, sample_ids)
@@ -397,13 +389,14 @@ def train(args):
                 # Semantic Consistency Relation Loss
                 loss_SRC, weight = calculate_R_loss(src=real_a_pool, tgt=fake_b_pool, nce_layers=nce_layers,
                                                     src_loss=src_loss, args=args, epoch=epoch)
-
+                
                 # HDCE Loss
                 if args.lambda_HDCE > 0.0:
                     loss_hDCE = calculate_HDCE_loss(src=real_a_pool, tgt=fake_b_pool, hDCE=hDCE_loss,args=args,
                                                     nce_layers=nce_layers, weight=weight)
                 else:
                     loss_hDCE = 0.0
+
 
                 loss_hDCE_idt = 0
                 if args.dce_idt and args.lambda_HDCE > 0.0:
@@ -416,28 +409,6 @@ def train(args):
                     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
                 else:
                     total_hDCE_loss = loss_hDCE
-
-                # # Compute identity loss if enabled and scheduled
-                # compute_idt = (
-                #     args.dce_idt
-                #     and args.lambda_HDCE > 0.0
-                #     and epoch >= args.idt_start_epoch
-                #     and (args.idt_interval_steps == 0 or global_step % args.idt_interval_steps == 0)
-                # )
-
-                # if compute_idt:
-                #     _, weight_idt = calculate_R_loss(
-                #         src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
-                #         src_loss=src_loss, args=args, only_weight=True, epoch=epoch
-                #     )
-                #     loss_hDCE_idt = calculate_HDCE_loss(
-                #         src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
-                #         nce_layers=nce_layers, weight=weight_idt
-                #     )
-                #     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
-                # else:
-                #     loss_hDCE_idt = torch.tensor(0.0, device=img_a.device)
-                #     total_hDCE_loss = loss_hDCE
 
 
                 # Backprop through contrastive losses

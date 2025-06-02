@@ -5,7 +5,7 @@ from torch import nn
 class UNetAttentionHook:
     def __init__(self, model, nce_layers=None):
         """
-        Hooks into SDXL-Turbo UNet's down_blocks to capture all attention maps
+        Hooks into SDXL-Turbo UNet's down_blocks/up_blocks to capture all attention maps
         from BasicTransformerBlock.attn1 modules across CrossAttnDownBlock2D layers.
 
         Args:
@@ -15,44 +15,16 @@ class UNetAttentionHook:
         # Determine device from model parameters
         try:
             self.device = next(model.parameters()).device
-        except StopIteration:
-            # Fallback if model has no parameters
+        except StopIteration:  # Fallback if model has no parameters
             self.device = torch.device('cpu')
-        self.handles = []
-        # Storage for collected feature maps per forward pass
+        self.handles = [] # Storage for collected feature maps per forward pass
         self.attn_features = []  # list of torch.Tensor [B, C, H, W]
         self.nce_layers = nce_layers or list(range(100))  # fallback to all layers
         self._register_hooks()
 
-#     def _register_hooks(self):
-#         # Attach forward hooks on each attention sub-layer
-#         for block in self.model.down_blocks:
-#             if hasattr(block, "attentions"):
-#                 for attn_mod in block.attentions:
-#                     for transformer in attn_mod.transformer_blocks:
-#                         handle = transformer.attn1.register_forward_hook(self._hook_fn)
-#                         self.handles.append(handle)
-
-#     def _hook_fn(self, module, input, output):
-#         """
-#         Captures the attention output:
-#         - output: Tensor of shape [B, T, C] (tokens)
-#         Reshapes to [B, C, H, W] for square T.
-#         """
-#         attn_map = output  # [B, T, C]
-#         B, T, C = attn_map.shape
-#         spatial = int(T ** 0.5)
-#         if spatial * spatial != T:
-#             # Skip non-square token maps
-#             return
-#         # reshape tokens to spatial map
-#         attn_map = attn_map.permute(0, 2, 1).reshape(B, C, spatial, spatial)
-#         # Detach and move to stored device
-#         self.attn_features.append(attn_map.detach().to(self.device))
-
     def _register_hooks(self):
         self.global_layer_idx = 0  # reset global index
-        for block in self.model.down_blocks:
+        for block in self.model.up_blocks:
             if hasattr(block, "attentions"):
                 for attn_mod in block.attentions:
                     for transformer in attn_mod.transformer_blocks:
@@ -64,10 +36,11 @@ class UNetAttentionHook:
                                     B, T, C = output.shape
                                     spatial = int(T ** 0.5)
                                     if spatial * spatial != T:
+                                        print(f"Skipping non-square attention map at layer {i}, shape={output.shape}")
                                         return
                                     attn_map = output.permute(0, 2, 1).reshape(B, C, spatial, spatial)
-                                    self.attn_features.append(attn_map.detach().to(self.device))
-
+                                    self.attn_features.append(attn_map.detach().to(self.device))                
+                                    # print(f"Captured attn map from layer {i} with shape {attn_map.shape}") # debug statement
                                 return _hook_fn
 
                             handle = transformer.attn1.register_forward_hook(make_hook(i=idx))
@@ -124,18 +97,45 @@ class UNetAttentionHook:
         Returns:
             list[torch.Tensor]: selected attention feature maps
         """
-        # 1) clear previous
+        # clear previous
         self.clear()
 
-        # 2) forward UNet (hooks capture features)
+        # forward UNet (hooks capture features)
         _ = unet(
             latent, timestep=timestep,
             encoder_hidden_states=text_embed,
             added_cond_kwargs={"text_embeds": pooled_embed,
                                "time_ids": time_ids},
         )
-        # 4) retrieve and select
-        all_feats = self.get_and_clear_features()
-        # guard index range
-        selected = [all_feats[i] for i in nce_layers if 0 <= i < len(all_feats)]
-        return selected
+        # retrieve and select
+        selected_feats = self.get_and_clear_features()
+
+        return selected_feats
+    
+    # === capturing all attention features ===
+
+#     def _register_hooks(self):
+#         # Attach forward hooks on each attention sub-layer
+#         for block in self.model.down_blocks:
+#             if hasattr(block, "attentions"):
+#                 for attn_mod in block.attentions:
+#                     for transformer in attn_mod.transformer_blocks:
+#                         handle = transformer.attn1.register_forward_hook(self._hook_fn)
+#                         self.handles.append(handle)
+
+#     def _hook_fn(self, module, input, output):
+#         """
+#         Captures the attention output:
+#         - output: Tensor of shape [B, T, C] (tokens)
+#         Reshapes to [B, C, H, W] for square T.
+#         """
+#         attn_map = output  # [B, T, C]
+#         B, T, C = attn_map.shape
+#         spatial = int(T ** 0.5)
+#         if spatial * spatial != T:
+#             # Skip non-square token maps
+#             return
+#         # reshape tokens to spatial map
+#         attn_map = attn_map.permute(0, 2, 1).reshape(B, C, spatial, spatial)
+#         # Detach and move to stored device
+#         self.attn_features.append(attn_map.detach().to(self.device))

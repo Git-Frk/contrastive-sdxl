@@ -34,7 +34,7 @@ def parse_args_unpaired_training():
     parser.add_argument('--init_gain', type=float, default=0.02,
                         help='scaling factor for normal, xavier and orthogonal.')
     parser.add_argument('--num_patches', type=int, default=256, help='number of patches per layer')
-    parser.add_argument('--nce_layers', type=str, default='0,4,8,12,16,20',
+    parser.add_argument('--nce_layers', type=str, default='2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32',
                         help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
@@ -47,11 +47,6 @@ def parse_args_unpaired_training():
     parser.add_argument('--lambda_HDCE', type=float, default=1.0, help='weight for HDCE loss')
     parser.add_argument('--lambda_SRC', type=float, default=1.0, help='weight for SRC loss')
     parser.add_argument('--dce_idt', action='store_true')
-    # parser.add_argument('--idt_start_epoch', type=int, default=0,
-    #                 help='Start computing identity loss only after this epoch.')
-    # parser.add_argument('--idt_interval_steps', type=int, default=0,
-    #                 help='Frequency (in steps) to compute identity loss. 0 = every step.')
-
 
     parser.add_argument('--nce_T', type=float, default=0.07, help='temperature for NCE loss')
 
@@ -337,47 +332,6 @@ class UnpairedDataset(torch.utils.data.Dataset):
             "time_ids_tgt": time_ids_tgt,
         }
 
-
-# def data_dependent_initialize(data, netF, unet, vae_enc, vae_dec, attn_hook, args, accelerator, prompt_embeds,
-#                               pooled_embeds):
-#     """
-#     Initializes netF using a dummy forward pass on SDXL-Turbo attention features.
-#     This ensures that MLP heads inside PatchSampleF are correctly initialized.
-#
-#     After that, registers the optimizer for netF using its own learning rate and betas.
-#
-#     Args:
-#         netF (nn.Module): PatchSampleF network for sampling patch features.
-#         unet (UNet2DConditionModel): UNet with self-attention hooks already attached.
-#         vae_enc (VAE_encode): Encoded VAE
-#         vae_dec (VAE_decode): Decoded VAE
-#         attn_hook (UNetAttentionHook): Hook object for extracting attention features.
-#         args: Argparse namespace
-#         accelerator: HuggingFace accelerator
-#         prompt_embeds (Tensor): Prompt embeddings (B, T, D)
-#         pooled_embeds (Tensor): Pooled global embeddings (B, D)
-#     """
-#
-#     timestep = torch.tensor([args.max_train_steps - 1], device=accelerator.device).long()
-#
-#     # Extract features (this internally calls netF.create_mlp if not initialized)
-#     with torch.no_grad():
-#         features = attn_hook.extract_attention_features(
-#             data, vae_enc, unet, timestep,
-#             prompt_embeds, pooled_embeds
-#         )
-#         _ = netF(features)  # this triggers netF.create_mlp()
-#
-#     # Define optimizer for netF
-#     optimizer_F = torch.optim.AdamW(
-#         netF.parameters(),
-#         lr=args.learning_rate_netF,
-#         betas=(args.adam_beta1_netF, args.adam_beta2_netF),
-#     )
-#     optimizer_F = accelerator.prepare(optimizer_F)
-#
-#     return optimizer_F
-
 def data_dependent_initialize(
         data: torch.Tensor,
         netF: nn.Module,
@@ -387,38 +341,32 @@ def data_dependent_initialize(
         nce_layers: list[int],
         args,
         accelerator,
+        timestep: torch.Tensor,
         prompt_embeds: torch.Tensor,
         pooled_embeds: torch.Tensor,
         time_ids: torch.Tensor
 ):
     """
     Initializes netF using a single forward pass through UNet under the attention hook,
-    on just one example, in mixed precision.
+    on just one example.
     """
 
     # pick only one example (B=1)
     sample = data.to(accelerator.device)
 
-    # build the max timestep tensor
-    max_t = accelerator.device  # preserve dtype/device
-    timestep = torch.tensor(
-        [args.max_train_steps - 1],
-        device=accelerator.device
-    ).long()
-
     # no grad + mixed precision
     with torch.no_grad():
-        with accelerator.autocast():
-            latent = vae_enc(sample)
+        # with accelerator.autocast():
+        latent = vae_enc(sample)
 
-            # run UNet+hook to grab attention maps
-            features = attn_hook.extract_attention_features(latent=latent, unet=unet, timestep=timestep,
-                                                            text_embed=prompt_embeds, pooled_embed=pooled_embeds,
-                                                            time_ids=time_ids,
-                                                            nce_layers=nce_layers)
+        # run UNet+hook to grab attention maps
+        features = attn_hook.extract_attention_features(latent=latent, unet=unet, timestep=timestep,
+                                                        text_embed=prompt_embeds, pooled_embed=pooled_embeds,
+                                                        time_ids=time_ids,
+                                                        nce_layers=nce_layers)
 
-            # this will trigger netF.create_mlp(...)
-            _ = netF(features)
+        # this will trigger netF.create_mlp(...)
+        _ = netF(features)
 
     # define & prepare optimizer for netF
     optimizer_F = torch.optim.AdamW(

@@ -4,6 +4,8 @@
 # Python bytecode cache
 __pycache__/
 # Generated outputs (e.g., inference results, images)
+outputs/
+# models and checkpoints
 output/
 # Backup or reference code versions
 pre-modified versions/
@@ -40,3 +42,4 @@ inference_day2night.py
 # images
 test1.png
 test2.png
+.vscode/settings.json
