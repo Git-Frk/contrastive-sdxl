@@ -26,6 +26,7 @@ def initialize_unet(rank, return_lora_module_names=False, torch_dtype=torch.floa
         "proj_out", "proj_in", "ff.net.2", "ff.net.0.proj"
     ]
 
+
     for n, p in unet.named_parameters():
         if "bias" in n or "norm" in n:
             continue
@@ -47,15 +48,7 @@ def initialize_unet(rank, return_lora_module_names=False, torch_dtype=torch.floa
                                    lora_alpha=rank)
     lora_conf_others = LoraConfig(r=rank, init_lora_weights="gaussian", target_modules=l_modules_others,
                                   lora_alpha=rank)
-
-    #     # Add adapters individually only if they don't exist
-    #     if not hasattr(unet, "peft_config") or "default_encoder" not in unet.peft_config:
-    #         unet.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
-    #     if not hasattr(unet, "peft_config") or "default_decoder" not in unet.peft_config:
-    #         unet.add_adapter(lora_conf_decoder, adapter_name="default_decoder")
-    #     if not hasattr(unet, "peft_config") or "default_others" not in unet.peft_config:
-    #         unet.add_adapter(lora_conf_others, adapter_name="default_others")
-
+    
     # Add adapters individually only if they don't exist, with console feedback
     cfg = getattr(unet, "peft_config", {})
 
