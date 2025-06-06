@@ -33,8 +33,8 @@ def parse_args_unpaired_training():
                         choices=['normal', 'xavier', 'kaiming', 'orthogonal'], help='network initialization')
     parser.add_argument('--init_gain', type=float, default=0.02,
                         help='scaling factor for normal, xavier and orthogonal.')
-    parser.add_argument('--num_patches', type=int, default=256, help='number of patches per layer')
-    parser.add_argument('--nce_layers', type=str, default='2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32',
+    parser.add_argument('--num_patches', type=int, default=128, help='number of patches per layer')
+    parser.add_argument('--nce_layers', type=str, default='2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32',
                         help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
@@ -43,6 +43,9 @@ def parse_args_unpaired_training():
     parser.add_argument("--gan_disc_type", default="vagan_clip")
     parser.add_argument("--gan_loss_type", default="multilevel_sigmoid_s")
     parser.add_argument("--lambda_gan", default=0.5, type=float)  # for CUT paper code, it is 1.0
+    
+    parser.add_argument("--lambda_idt_lpips", default=1.0, type=float)  # TEST
+    parser.add_argument("--lambda_idt", default=1.0, type=float)  # TEST
 
     parser.add_argument('--lambda_HDCE', type=float, default=1.0, help='weight for HDCE loss')
     parser.add_argument('--lambda_SRC', type=float, default=1.0, help='weight for SRC loss')
@@ -72,8 +75,8 @@ def parse_args_unpaired_training():
     parser.add_argument("--pretrained_model_name_or_path", default="stabilityai/sdxl-turbo")
     parser.add_argument("--revision", default=None, type=str)
     parser.add_argument("--variant", default=None, type=str)
-    parser.add_argument("--lora_rank_unet", default=128, type=int)
-    parser.add_argument("--lora_rank_vae", default=8, type=int)
+    parser.add_argument("--lora_rank_unet", default=64, type=int)
+    parser.add_argument("--lora_rank_vae", default=4, type=int)
 
     # args for validation and logging
     parser.add_argument("--viz_freq", type=int, default=20)
@@ -126,10 +129,10 @@ def parse_args_unpaired_training():
 class RandomCropWithCoords:
     """
     A transform that performs a random crop on a PIL image and returns both 
-    the cropped image and the coordinates of the crop’s top-left corner.
+    the cropped image and the coordinates of the crop's top-left corner.
     This is useful when you need to track exactly where the image was cropped
-    (e.g., for SDXL’s “text_time” micro-conditioning) while still using
-    torchvision’s RandomCrop logic under the hood.
+    (e.g., for SDXL's “text_time” micro-conditioning) while still using
+    torchvision's RandomCrop logic under the hood.
 
     Attributes:
         size (int): The height and width of the square crop.
@@ -158,7 +161,7 @@ class RandomCropWithCoords:
             tuple:
                 cropped (PIL.Image.Image): The randomly cropped sub-image of shape (size x size).
                 coords (tuple[int, int]): The (x, y) coordinates of the top-left
-                    corner of the crop in the original image’s coordinate space.
+                    corner of the crop in the original image's coordinate space.
         """
         # Sample random crop parameters (i: top, j: left, h: height, w: width)
         i, j, h, w = RandomCrop.get_params(img, output_size=(self.size, self.size))
@@ -366,7 +369,7 @@ def data_dependent_initialize(
                                                         nce_layers=nce_layers)
 
         # this will trigger netF.create_mlp(...)
-        _ = netF(features)
+        _ = netF(features, num_patches=args.num_patches)
 
     # define & prepare optimizer for netF
     optimizer_F = torch.optim.AdamW(

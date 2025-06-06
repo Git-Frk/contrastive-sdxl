@@ -5,6 +5,7 @@ import torch
 from torchvision import transforms
 from constrastive_sdxl import ContrastiveSDXL_Turbo
 from utils.train_utils import build_transform
+from diffusers.utils.import_utils import is_xformers_available
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -24,9 +25,10 @@ if __name__ == "__main__":
 
     if args.model_path is not None and args.prompt is None:
         # raise ValueError('prompt is required when loading a custom model_path.')
-        args.prompt = ("Driving at night. Artificial lights are accurately positioned: streetlights cast a glow on sidewalks, "
-                       "car headlights illuminate the road with focused beams, and building windows emit a soft interior light. "
-                       "Shadows and reflections follow realworld physics, with ambient darkness ensuring that all illumination comes from natural sources.")
+        # args.prompt = ("Driving at night. Artificial lights are accurately positioned: streetlights cast a glow on sidewalks, "
+        #                "car headlights illuminate the road with focused beams, and building windows emit a soft interior light. "
+        #                "Shadows and reflections follow realworld physics, with ambient darkness ensuring that all illumination comes from natural sources.")
+        args.prompt = ("Driving at night.")
 
     if args.model_name is not None:
         assert args.prompt is None, 'prompt is not required when loading a pretrained model.'
@@ -35,19 +37,31 @@ if __name__ == "__main__":
     # initialize the model
     model = ContrastiveSDXL_Turbo(pretrained_name=args.model_name, pretrained_path=args.model_path)
     model.eval()
-    model.unet.enable_xformers_memory_efficient_attention()
-    if args.use_fp16:
-        model.half()
+    
+    if is_xformers_available():
+        try:
+            model.unet.enable_xformers_memory_efficient_attention()
+            print("🚀 xFormers memory-efficient attention enabled")
+        except Exception as e:
+            # Should be rare, but just in case some xFormers API changed
+            print(f"⚠️  Could not enable xFormers attention: {e}")
+    else:
+        print("ℹ️  xFormers not installed; using standard attention")
+
+        if args.use_fp16:
+            model.half()
 
     T_val = build_transform(args.image_prep)
 
     input_image = Image.open(args.input_image).convert('RGB')
-    time_ids = [input_image.shape[1], input_image.shape[0], 0, 0, input_image.size[1], input_image.size[0]]
+    time_ids = [input_image.size[1], input_image.size[0], 0, 0, input_image.size[1], input_image.size[0]]
+
     # translate the image
     with torch.no_grad():
         input_img = T_val(input_image)
         x_t = transforms.ToTensor()(input_img)
         x_t = transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])(x_t).unsqueeze(0).cuda()
+        time_ids = torch.tensor(time_ids, device=x_t.device)
         if args.use_fp16:
             x_t = x_t.half()
         output = model(x_t, caption=args.prompt, time_ids = time_ids)
@@ -56,6 +70,9 @@ if __name__ == "__main__":
     output_pil = output_pil.resize((input_image.width, input_image.height), Image.LANCZOS)  # Try Bicubic too
 
     # save the output image
-    bname = os.path.basename(args.input_image)
-    os.makedirs(args.output_dir, exist_ok=True)
-    output_pil.save(os.path.join(args.output_dir, bname))
+    # bname = os.path.basename(args.input_image)
+    # os.makedirs(args.output_dir, exist_ok=True)
+    # output_pil.save(os.path.join(args.output_dir, bname))
+
+    output_pil.save(args.output_dir) # for generating multiple image using inference_day2night.py
+

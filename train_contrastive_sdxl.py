@@ -2,6 +2,7 @@ import os
 import gc
 import copy
 import torch
+import lpips
 import wandb
 from glob import glob
 import numpy as np
@@ -76,6 +77,7 @@ def train(args):
     # Initialiase the Loses:
     src_loss = SRC_Loss(args)
     hDCE_loss = PatchHDCELoss(args)
+    crit_idt = torch.nn.L1Loss()
 
     # Attempt to turn on xFormers only if installed
     if is_xformers_available():
@@ -209,9 +211,13 @@ def train(args):
         num_cycles=args.lr_num_cycles,
         power=args.lr_power
     )
+
+    net_lpips = lpips.LPIPS(net='vgg')
+    net_lpips.cuda()
+    net_lpips.requires_grad_(False)
     
-    optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc = accelerator.prepare(
-        optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc
+    net_lpips, optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc = accelerator.prepare(
+        net_lpips, optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc
     )
 
     if accelerator.is_main_process:
@@ -381,10 +387,10 @@ def train(args):
                                                                       time_ids=time_ids_idt_b, nce_layers=nce_layers)
 
                 # Sample contrastive patches using netF (MLPs)
-                fake_b_pool, sample_ids = netF(fake_b_features, args.num_patches, None)
-                real_a_pool, _ = netF(real_a_features, args.num_patches, sample_ids)
-                idt_b_pool, _ = netF(idt_b_features, args.num_patches, sample_ids)
-                real_b_pool, _ = netF(real_b_features, args.num_patches, sample_ids)
+                fake_b_pool, sample_ids = netF(feats=fake_b_features, num_patches=args.num_patches, patch_ids=None)
+                real_a_pool, _ = netF(feats=real_a_features, num_patches=args.num_patches, patch_ids=sample_ids)
+                idt_b_pool, _ = netF(feats=idt_b_features, num_patches=args.num_patches, patch_ids=sample_ids)
+                real_b_pool, _ = netF(feats=real_b_features, num_patches=args.num_patches, patch_ids=sample_ids)
 
                 # Semantic Consistency Relation Loss
                 loss_SRC, weight = calculate_R_loss(src=real_a_pool, tgt=fake_b_pool, nce_layers=nce_layers,
@@ -397,22 +403,8 @@ def train(args):
                 else:
                     loss_hDCE = 0.0
 
-
-                loss_hDCE_idt = 0
-                if args.dce_idt and args.lambda_HDCE > 0.0:
-                    _, weight_idt = calculate_R_loss(src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
-                                                     src_loss=src_loss, args=args, only_weight=True,
-                                                     epoch=epoch)
-                    loss_hDCE_idt = calculate_HDCE_loss(src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
-                                                        nce_layers=nce_layers, weight=weight_idt)
-                    #  In original CycleGAN-Turbo work these losses are seperate and not combined together
-                    total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
-                else:
-                    total_hDCE_loss = loss_hDCE
-
-
                 # Backprop through contrastive losses
-                accelerator.backward(total_hDCE_loss + loss_SRC, retain_graph=False)
+                accelerator.backward(loss_hDCE + loss_SRC, retain_graph=False)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
 
@@ -425,8 +417,66 @@ def train(args):
                     lr_scheduler_netF.step()
                 optimizer_netF.zero_grad()
 
+                # loss_hDCE_idt = 0
+                # if args.dce_idt and args.lambda_HDCE > 0.0:
+                #     _, weight_idt = calculate_R_loss(src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
+                #                                      src_loss=src_loss, args=args, only_weight=True,
+                #                                      epoch=epoch)
+                #     loss_hDCE_idt = calculate_HDCE_loss(src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
+                #                                         nce_layers=nce_layers, weight=weight_idt)
+                #     #  In original CycleGAN-Turbo work these losses are seperate and not combined together
+                #     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
+                # else:
+                #     total_hDCE_loss = loss_hDCE
+                    
+                
+                # # Backprop through contrastive losses
+                # accelerator.backward(total_hDCE_loss + loss_SRC, retain_graph=False)
+                # if accelerator.sync_gradients:
+                #     accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
+
+                # optimizer_gen.step()
+                # lr_scheduler_gen.step()
+                # optimizer_gen.zero_grad()
+
+                # if accelerator.sync_gradients:
+                #     optimizer_netF.step()
+                #     lr_scheduler_netF.step()
+                # optimizer_netF.zero_grad()
+
+                loss_idt = 0
+                if args.dce_idt and args.lambda_idt > 0.0:
+                    loss_idt = crit_idt(img_b, idt_b) * args.lambda_idt
+                    loss_idt += net_lpips(img_b, idt_b).mean() * args.lambda_idt_lpips
+
+                # Backprop through contrastive losses
+                accelerator.backward(loss_idt, retain_graph=False)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
+
+                optimizer_gen.step()
+                lr_scheduler_gen.step()
+                optimizer_gen.zero_grad()
+
+
                 # ======================================================================================================
                 # ------------------------------------------- Generator Loss -------------------------------------------
+
+                lat_a = ContrastiveSDXL_Turbo.encode(img_a, vae_enc)
+
+                # TEST
+                fake_lat_a, real_a_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_a, unet=unet,
+                                                                                        scheduler=noise_scheduler_1step,
+                                                                                        timesteps=timesteps,
+                                                                                        prompt_embeds=fixed_prompt_embeds,
+                                                                                        pooled_embeds=fixed_pooled_embeds,
+                                                                                        time_ids=time_ids_src,
+                                                                                        attn_hook=attn_hook,
+                                                                                        nce_layers=nce_layers
+                                                                                       )
+ 
+                fake_b = ContrastiveSDXL_Turbo.decode(fake_lat_a, vae_dec)
+
 
                 # Compute adversarial loss (realisticness of fake_b)
                 loss_gan = net_disc(fake_b, for_G=True).mean() * args.lambda_gan
@@ -476,7 +526,9 @@ def train(args):
                 logs["SRC"] = loss_SRC.detach().item()
                 logs["gan"] = loss_gan.detach().item()
                 logs["disc"] = loss_D_fake.detach().item() + loss_D_real.detach().item()
-                logs["idt"] = loss_hDCE_idt.detach().item()
+                # logs["idt"] = loss_hDCE_idt.detach().item()
+                logs["idt"] = loss_idt.detach().item()
+
 
                 if accelerator.sync_gradients:
                     progress_bar.update(1)
