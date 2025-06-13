@@ -24,7 +24,7 @@ class UNetAttentionHook:
 
     def _register_hooks(self):
         self.global_layer_idx = 0  # reset global index
-        for block in self.model.up_blocks:
+        for block in self.model.down_blocks:
             if hasattr(block, "attentions"):
                 for attn_mod in block.attentions:
                     for transformer in attn_mod.transformer_blocks:

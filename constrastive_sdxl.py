@@ -278,9 +278,11 @@ class ContrastiveSDXL_Turbo(nn.Module):
         ])
 
         # Pull out the attention feature maps the hook captured
-        features = attn_hook.get_and_clear_features()
+        # features = attn_hook.get_and_clear_features()
 
-        return denoised, features
+        # return denoised, features
+        return denoised, None
+
 
     @staticmethod
     def get_trainable_params(unet, vae):

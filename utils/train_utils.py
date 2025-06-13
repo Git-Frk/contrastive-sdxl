@@ -34,7 +34,7 @@ def parse_args_unpaired_training():
     parser.add_argument('--init_gain', type=float, default=0.02,
                         help='scaling factor for normal, xavier and orthogonal.')
     parser.add_argument('--num_patches', type=int, default=128, help='number of patches per layer')
-    parser.add_argument('--nce_layers', type=str, default='2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32',
+    parser.add_argument('--nce_layers', type=str, default='30, 32, 34, 36, 38',
                         help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
@@ -354,7 +354,6 @@ def data_dependent_initialize(
     on just one example.
     """
 
-    # pick only one example (B=1)
     sample = data.to(accelerator.device)
 
     # no grad + mixed precision
@@ -362,11 +361,14 @@ def data_dependent_initialize(
         # with accelerator.autocast():
         latent = vae_enc(sample)
 
-        # run UNet+hook to grab attention maps
-        features = attn_hook.extract_attention_features(latent=latent, unet=unet, timestep=timestep,
-                                                        text_embed=prompt_embeds, pooled_embed=pooled_embeds,
-                                                        time_ids=time_ids,
-                                                        nce_layers=nce_layers)
+        # # run UNet+hook to grab attention maps
+        # features = attn_hook.extract_attention_features(latent=latent, unet=unet, timestep=timestep,
+        #                                                 text_embed=prompt_embeds, pooled_embed=pooled_embeds,
+        #                                                 time_ids=time_ids,
+        #                                                 nce_layers=nce_layers)
+
+    # Extract self-attention feature maps from fake_B (translated) image - using DINOv2.
+        features = attn_hook.extract_attention_features(img = sample)
 
         # this will trigger netF.create_mlp(...)
         _ = netF(features, num_patches=args.num_patches)

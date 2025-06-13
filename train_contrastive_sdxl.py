@@ -22,13 +22,15 @@ from constrastive_sdxl import ContrastiveSDXL_Turbo, VAE_encode, VAE_decode
 from models.vae.vae_factory import initialize_vae
 from models.unet.unet_factory import initialize_unet
 from models.unet.unet_attention_hook import UNetAttentionHook
+from models.dino_attn_hook import DINOAttentionHook, resize_for_dino
 from models.patch_network import define_F
 from losses.SRC import SRC_Loss, calculate_R_loss
 from losses.hDCE import PatchHDCELoss, calculate_HDCE_loss
 from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpaired_training, data_dependent_initialize
+from utils import setup_paths
+from roma import roma_matching
 
 
-# import lpips
 # from my_utils.dino_struct import DinoStructureLoss
 
 
@@ -171,7 +173,12 @@ def train(args):
 
     # === Attach attention feature hook ===
 #     attn_hook = UNetAttentionHook(unet)
-    attn_hook = UNetAttentionHook(unet, nce_layers=nce_layers)
+    # attn_hook = UNetAttentionHook(unet, nce_layers=nce_layers)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dino = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
+    dino = dino.to(device)
+    attn_hook = DINOAttentionHook(dino, nce_layers=nce_layers)
     
     # Optimizer for generator components (UNet + LoRA + VAE LoRA + skip convs)
     optimizer_gen = torch.optim.AdamW(
@@ -267,10 +274,11 @@ def train(args):
                     [noise_scheduler_1step.config.num_train_timesteps - 1] * bsz,
                     device=img_a.device
                 ).long()
-
+                
+                dino_img_a = resize_for_dino(img_a)
                 # First-time initialization of netF (MLP heads) and its optimizer
                 if epoch == 0 and global_step == 0:
-                    optimizer_netF = data_dependent_initialize(data=img_a, netF=netF, unet=unet, vae_enc=vae_enc,
+                    optimizer_netF = data_dependent_initialize(data=dino_img_a, netF=netF, unet=unet, vae_enc=vae_enc,
                                                                attn_hook=attn_hook, nce_layers=nce_layers, args=args,
                                                                accelerator=accelerator,
                                                                timestep=timesteps,
@@ -306,7 +314,7 @@ def train(args):
                 # 2) Denoise once at the same time extract self-attention feature maps from real_A (source) image.
                 # These are intermediate features collected from down-block attention modules in the UNet,
                 # used later for computing semantic contrastive losses (SRC, HDCE).
-                fake_lat_a, real_a_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_a, unet=unet,
+                fake_lat_a, _real_a_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_a, unet=unet,
                                                                                         scheduler=noise_scheduler_1step,
                                                                                         timesteps=timesteps,
                                                                                         prompt_embeds=fixed_prompt_embeds,
@@ -335,7 +343,7 @@ def train(args):
 
                 # 2) Denoise once at the same time extract self-attention feature maps from real B image..
 
-                idt_lat_b, real_b_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_b, unet=unet,
+                idt_lat_b, _real_b_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_b, unet=unet,
                                                                                        scheduler=noise_scheduler_1step,
                                                                                        timesteps=timesteps,
                                                                                        prompt_embeds=fixed_prompt_embeds,
@@ -375,16 +383,24 @@ def train(args):
                 #  # ----------------------------------------------------------------------------------------------------------
 
                 # Extract self-attention feature maps from fake_B (translated) image.
-                fake_b_features = attn_hook.extract_attention_features(latent=lat_fake_b, unet=unet, timestep=timesteps,
-                                                                       text_embed=fixed_prompt_embeds,
-                                                                       pooled_embed=fixed_pooled_embeds,
-                                                                       time_ids=time_ids_fake_b, nce_layers=nce_layers)
+                # fake_b_features = attn_hook.extract_attention_features(latent=lat_fake_b, unet=unet, timestep=timesteps,
+                #                                                        text_embed=fixed_prompt_embeds,
+                #                                                        pooled_embed=fixed_pooled_embeds,
+                #                                                        time_ids=time_ids_fake_b, nce_layers=nce_layers)
 
-                # Extract self-attention feature maps from identitiy B ('recreated') image.
-                idt_b_features = attn_hook.extract_attention_features(latent=lat_idt_b, unet=unet, timestep=timesteps,
-                                                                      text_embed=fixed_prompt_embeds,
-                                                                      pooled_embed=fixed_pooled_embeds,
-                                                                      time_ids=time_ids_idt_b, nce_layers=nce_layers)
+                # # Extract self-attention feature maps from identitiy B ('recreated') image.
+                # idt_b_features = attn_hook.extract_attention_features(latent=lat_idt_b, unet=unet, timestep=timesteps,
+                #                                                       text_embed=fixed_prompt_embeds,
+                #                                                       pooled_embed=fixed_pooled_embeds,
+                #                                                       time_ids=time_ids_idt_b, nce_layers=nce_layers)
+
+                # Extract self-attention feature maps from fake_B (translated) image - using DINOv2.
+                dino_img_b, dino_fake_b, dino_idt_b = resize_for_dino(img_b), resize_for_dino(fake_b), resize_for_dino(idt_b)
+                real_a_features = attn_hook.extract_attention_features(img = dino_img_a)   
+                real_b_features = attn_hook.extract_attention_features(img = dino_img_b)
+                fake_b_features = attn_hook.extract_attention_features(img = dino_fake_b)
+                idt_b_features = attn_hook.extract_attention_features(img = dino_idt_b)
+
 
                 # Sample contrastive patches using netF (MLPs)
                 fake_b_pool, sample_ids = netF(feats=fake_b_features, num_patches=args.num_patches, patch_ids=None)
