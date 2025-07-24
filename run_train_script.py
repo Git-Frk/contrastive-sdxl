@@ -11,7 +11,7 @@ def main():
       --train_img_prep="sdxl_random_crop_512" \
       --val_img_prep="no_resize" \
       --learning_rate=1e-5 \
-      --max_train_steps=25000 \
+      --max_train_steps=12400 \
       --train_batch_size=1 \
       --gradient_accumulation_steps=1 \
       --lambda_gan=0.5 \

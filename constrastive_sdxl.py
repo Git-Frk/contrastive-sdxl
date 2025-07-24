@@ -7,11 +7,12 @@ from transformers import AutoTokenizer, CLIPTextModel, CLIPTextModelWithProjecti
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
-
+import torch.nn.functional as F
 p = "models/vae/"
 sys.path.append(p)
-from utils.ddpm_utils import make_1step_sched
+from utils.ddpm_utils import make_1step_sched, make_4step_sched
 from models.vae.custom_vae_forward import custom_vae_encoder_fwd, custom_vae_decoder_fwd
+from diffusers import DDPMScheduler
 
 
 class VAE_encode(nn.Module):
@@ -28,8 +29,7 @@ class VAE_encode(nn.Module):
         self.vae = vae
 
     def forward(self, x):
-        # Forward pass through VAE encoder
-        # The encoder caches down block features in `current_down_blocks`
+        # Forward pass through VAE encoder. The encoder caches down block features in `current_down_blocks`
         _ = self.vae.encode(x)  # trigger caching
         latent = self.vae.encode(x).latent_dist.sample()
         return latent * self.vae.config.scaling_factor  # Stable Diffusion expects latents in a specific numerical range, vae.config.scaling_factor adjusts these values so that the UNet can process them properly.
@@ -47,17 +47,17 @@ class VAE_decode(nn.Module):
         self.vae = vae
 
     def forward(self, z):
-        # 1) pull out the cached down-blocks
+        # pull out the cached down-blocks from the encoder
         skip_acts = self.vae.encoder.current_down_blocks
         assert skip_acts is not None, "Missing encoder features for skip connections"
 
-        # 2) clear the cache on the encoder immediately
+        # clear the cache on the encoder immediately
         self.vae.encoder.current_down_blocks = None
 
-        # 3) inject into the decoder
+        # inject into the decoder
         self.vae.decoder.incoming_skip_acts = skip_acts
 
-        # 4) do the decode (and ensure we never leave skip_acts around)
+        # do the decode (and ensure we never leave skip_acts around)
         try:
             x_rec = self.vae.decode(z / self.vae.config.scaling_factor).sample
         finally:
@@ -87,8 +87,9 @@ class ContrastiveSDXL_Turbo(nn.Module):
         self.text_encoder_1 = CLIPTextModel.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder").cuda()
         self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder_2").cuda()
 
-        # One-step DDIM scheduler
-        self.sched = make_1step_sched()
+        # One-step DDPM scheduler 
+        self.scheduler = make_1step_sched()
+        self.timestep = 239
 
         # Initialize VAE with LoRA adapters and skip connection layers
         vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae")
@@ -108,9 +109,8 @@ class ContrastiveSDXL_Turbo(nn.Module):
         # Load from pretrained checkpoint if provided
         state_dict = torch.load(pretrained_path)
         self.load_ckpt_from_state_dict(state_dict)
-        # Optional: set default caption prompt
+
         self.caption = "Driving at night."
-        self.timesteps = torch.tensor([999], device="cuda").long()
 
         # Move core components to GPU
         self.vae_enc.cuda()
@@ -192,7 +192,6 @@ class ContrastiveSDXL_Turbo(nn.Module):
         if not hasattr(self.vae, "peft_config") or "vae_skip" not in self.vae.peft_config:
             self.vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
 
-        #         self.vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
 
         # Apply decoder gamma if needed for skip scaling
         self.vae.decoder.gamma = 1
@@ -225,65 +224,35 @@ class ContrastiveSDXL_Turbo(nn.Module):
         return vae_dec(latents)
 
     @staticmethod
-    def denoise_and_extract(
-            latents: torch.FloatTensor,
+    def denoise(latents: torch.FloatTensor,
             unet: nn.Module,
             scheduler,
-            timesteps: torch.LongTensor,
+            timestep, 
             prompt_embeds: torch.FloatTensor,
             pooled_embeds: torch.FloatTensor,
-            time_ids: torch.Tensor,
-            attn_hook,
-            nce_layers: list[int]):
+            time_ids: torch.Tensor): 
         """
-        Runs one step of denoising through the UNet under the attention hook,
-        then returns both the denoised latents and the collected attention features.
-
-        Args:
-          latents:        (B, C, H', W') noisy latents to denoise
-          unet:           the SDXL UNet model (with LoRA weights)
-          scheduler:      1-step DDIM scheduler
-          timesteps:      (B,) int tensor of timesteps (all equal here)
-          prompt_embeds:  (B, N, D) text encoder hidden states
-          pooled_embeds:  (B, Dp) text encoder pooled states
-          time_ids:       information on image size, crop size and the target/output shape(512x512)
-          attn_hook:      an instance of your UNetAttentionHook
-
-        Returns:
-          denoised:       (B, C, H', W') the updated latents after one step
-          features:       attention tensors
+        Denoise latents using the UNet and scheduler
         """
+
         B = latents.shape[0]
-        
-        # Clear any previous features in the hook
-        attn_hook.clear()
 
-        # noise = torch.rand_like(latents)
+        ts = torch.full((B,), timestep, device=latents.device, dtype=torch.long)
 
-        # latents = scheduler.add_noise(latents, noise, timesteps)
+        noisy_lantent = latents
 
-        # Run the UNet forward and capture the .sample output
         model_out = unet(
-            latents, timesteps,
-            encoder_hidden_states=prompt_embeds,
-            added_cond_kwargs={"text_embeds": pooled_embeds,
-                               "time_ids": time_ids},
-        )
-        noise_pred = model_out.sample  # shape (B, C, H', W')
+                noisy_lantent, ts,
+                encoder_hidden_states=prompt_embeds,
+                added_cond_kwargs={"text_embeds": pooled_embeds, "time_ids": time_ids},
+            )
+            
+        eps_pred = model_out.sample
 
-        # Scheduler one-step update in *batch* form
-        denoised = torch.stack([
-            scheduler.step(noise_pred[i], timesteps[i], latents[i], return_dict=True).prev_sample
-            for i in range(B)
-        ])
-
-        # Pull out the attention feature maps the hook captured
-        # features = attn_hook.get_and_clear_features()
-
-        # return denoised, features
-        return denoised, None
-
-
+        #  Denoised‑latent  
+        denoised_latent  = scheduler.step(eps_pred, ts, noisy_lantent, return_dict=True).pred_original_sample         
+        return denoised_latent, None
+    
     @staticmethod
     def get_trainable_params(unet, vae):
         """
@@ -338,12 +307,11 @@ class ContrastiveSDXL_Turbo(nn.Module):
         params_gen = dedupe_params(params_gen)
         return params_gen
 
-        return params_gen
 
     # ==================================================Inference Code=============================================================
 
     @staticmethod
-    def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, text_emb, pooled_emb, time_ids):
+    def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, prompt_embeds, pooled_embeds, time_ids, denoise_steps):
         """
         Forward pass through the VAE encoder, UNet, and VAE decoder.
     
@@ -359,33 +327,32 @@ class ContrastiveSDXL_Turbo(nn.Module):
         Returns:
             torch.Tensor: Reconstructed / translated image (B, C, H, W)
         """
-        B = x.shape[0]
-    
-        # Encode image to latent space using VAE
-        x_enc = vae_enc(x).to(x.dtype)
-    
-        # Predict noise residual using UNet
-        model_pred = unet(
-            x_enc, timesteps,
-            encoder_hidden_states=text_emb,
-            added_cond_kwargs={"text_embeds": pooled_emb,
-                               "time_ids": time_ids},
-        ).sample
-    
-        # Perform 1-step denoising using DDIM scheduler
-        x_out = torch.stack([
-            sched.step(model_pred[i], timesteps[i], x_enc[i], return_dict=True).prev_sample
-            for i in range(B)
-        ])
-    
-        # Decode latent back to image space using VAE
-        x_out_decoded = vae_dec(x_out)
-    
-        return x_out_decoded
-    
-    def forward(self, x_t, caption=None, caption_emb=None, time_ids=None):
+
+
+        latents = vae_enc(x).to(x.dtype)
+
+        B = latents.shape[0]
+
+        ts = torch.full((B,), timesteps, device=latents.device, dtype=torch.long)
+
+        noisy_lantent = latents
+
+        eps_pred = unet(
+                noisy_lantent, ts,
+                encoder_hidden_states=prompt_embeds,
+                added_cond_kwargs={"text_embeds": pooled_embeds, "time_ids": time_ids},
+            ).sample
+
+        #  Denoised‑latent pass 
+        denoised_latent  = sched.step(eps_pred, ts, noisy_lantent, return_dict=True).pred_original_sample  
+        x_out = vae_dec(denoised_latent)                
+
+        return x_out         
+        
+    def forward(self, x_t, caption=None, caption_emb=None, time_ids=None, denoise_steps=4):
         """
-        SDXL-Turbo forward pass with dual-tokenizer and dual-encoder prompt processing NOTE: only used in inference.py file.
+        SDXL-Turbo forward pass with dual-tokenizer and dual-encoder prompt processing 
+        NOTE: only used in inference.py file.
     
         This method performs the following:
         - Encodes a caption using both SDXL-Turbo tokenizers and text encoders.
@@ -443,16 +410,18 @@ class ContrastiveSDXL_Turbo(nn.Module):
     
             # Extract pooled embedding from text_encoder_2 (standard SDXL global summary)
             pooled_embeds = out_2[0]  # shape: (B, D)
-    
+
         # Run full pipeline: VAE encode → UNet → Scheduler step → VAE decode
         return self.forward_with_networks(
             x_t,
             self.vae_enc,
             self.unet,
             self.vae_dec,
-            self.sched,
-            self.timesteps,
+            self.scheduler,
+            self.timestep,
             prompt_embeds,
             pooled_embeds,
-            time_ids
+            time_ids, 
+            denoise_steps=denoise_steps
         )
+

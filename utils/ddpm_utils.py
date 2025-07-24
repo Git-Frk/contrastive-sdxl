@@ -6,6 +6,12 @@ from diffusers import DDPMScheduler
 
 def make_1step_sched():
     noise_scheduler_1step = DDPMScheduler.from_pretrained("stabilityai/sdxl-turbo", subfolder="scheduler")
-    noise_scheduler_1step.set_timesteps(1, device="cuda")
+    # noise_scheduler_1step.set_timesteps(1, device="cuda") # this is usually used for inference and not training
     noise_scheduler_1step.alphas_cumprod = noise_scheduler_1step.alphas_cumprod.cuda()
     return noise_scheduler_1step
+
+def make_4step_sched():
+    sched = DDPMScheduler.from_pretrained("stabilityai/sdxl-turbo", subfolder="scheduler")
+    sched.set_timesteps(4, device="cuda")  # use 4 denoising steps
+    sched.alphas_cumprod = sched.alphas_cumprod.to("cuda")
+    return sched

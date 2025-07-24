@@ -18,6 +18,10 @@ venv/
 .env/
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
+# test checkpoint folder
+misc/
+# custom VAE checkpoints
+/home/672511/contrastive-sdxl/models/vae/checkpoints
 # ======================
 # Ignored Files
 # ======================
@@ -43,3 +47,10 @@ inference_day2night.py
 test1.png
 test2.png
 .vscode/settings.json
+logs/error_265027.log
+logs/output_265027.log
+(zf)train_contrastive_sdxl.py
+logs/error_265515.log
+logs/output_265515.log
+inference_script.py
+.gitignore

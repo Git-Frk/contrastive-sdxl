@@ -17,18 +17,20 @@ from peft.utils import get_peft_model_state_dict
 from diffusers.utils.import_utils import is_xformers_available
 # from cleanfid.fid import get_folder_features, build_feature_extractor, frechet_distance
 import vision_aided_loss
-from utils.ddpm_utils import make_1step_sched
+from utils.ddpm_utils import make_1step_sched,make_4step_sched
 from constrastive_sdxl import ContrastiveSDXL_Turbo, VAE_encode, VAE_decode
 from models.vae.vae_factory import initialize_vae
 from models.unet.unet_factory import initialize_unet
 from models.unet.unet_attention_hook import UNetAttentionHook
 from models.dino_attn_hook import DINOAttentionHook, resize_for_dino
 from models.patch_network import define_F
+from losses.zeroFlow import IdentityWarpLoss, lambda_warp
 from losses.SRC import SRC_Loss, calculate_R_loss
 from losses.hDCE import PatchHDCELoss, calculate_HDCE_loss
-from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpaired_training, data_dependent_initialize
+from utils.train_utils import UnpairedDataset, build_transform, parse_args_unpaired_training, data_dependent_initialize, prep_for_roma, contrastive_at_scale
 from utils import setup_paths
-from roma import roma_matching
+from romatch import roma_outdoor
+from diffusers import DDPMScheduler
 
 
 # from my_utils.dino_struct import DinoStructureLoss
@@ -40,7 +42,6 @@ def train(args):
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         log_with=args.report_to
         # mixed_precision="bf16"
-
     )
     set_seed(args.seed)
 
@@ -58,8 +59,10 @@ def train(args):
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("stabilityai/sdxl-turbo",
                                                                  subfolder="text_encoder_2")
 
-    # === 1-step DDIM scheduler ===
-    noise_scheduler_1step = make_1step_sched()
+    # === DDPM scheduler & Timestep for 1-step DDPM === (denoise at timestep t, e.g. 239)
+
+    scheduler = make_1step_sched()
+    timestep = 239
 
     # === Initialize UNet and VAE with LoRA setup ===
     unet, l_modules_unet_encoder, l_modules_unet_decoder, l_modules_unet_others = initialize_unet(
@@ -76,21 +79,15 @@ def train(args):
         net_disc = vision_aided_loss.Discriminator(cv_type='clip', loss_type=args.gan_loss_type, device="cuda")
         net_disc.cv_ensemble.requires_grad_(False)
 
-    # Initialiase the Loses:
-    src_loss = SRC_Loss(args)
-    hDCE_loss = PatchHDCELoss(args)
-    crit_idt = torch.nn.L1Loss()
-
     # Attempt to turn on xFormers only if installed
     if is_xformers_available():
         try:
             unet.enable_xformers_memory_efficient_attention()
             print("🚀 xFormers memory-efficient attention enabled")
         except Exception as e:
-            # Should be rare, but just in case some xFormers API changed
-            print(f"⚠️  Could not enable xFormers attention: {e}")
+            print(f"⚠️ Could not enable xFormers attention: {e}")
     else:
-        print("ℹ️  xFormers not installed; using standard attention")
+        print("⚙️ xFormers not installed; using standard attention")
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
@@ -161,20 +158,35 @@ def train(args):
         fixed_prompt_embeds = torch.cat([out_1.hidden_states[-2], out_2.hidden_states[-2]], dim=-1)
         fixed_pooled_embeds = out_2[0]
 
-    # Optional: free up memory
+    # free up memory
     del text_encoder_1, text_encoder_2, tokenizer_1, tokenizer_2
     torch.cuda.empty_cache()
 
+    # Initialize RoMa model:
+    roma = roma_outdoor(device='cuda').eval()
+    for p in roma.parameters():
+        p.requires_grad = False
+    roma.decoder.detach = False    
+    vit = roma.encoder.dinov2_vitl14[0]
+    vit.forward_features = torch.enable_grad()(vit.forward_features)
+    roma.match = roma.match.__wrapped__.__get__(roma, type(roma))  # Grab the original method to avoid issues with `torch.no_grad()`
+
     # Prepare models, optimizers, dataloader, and schedulers with Accelerator
-    unet, vae_enc, vae_dec, net_disc, netF = accelerator.prepare(unet, vae_enc, vae_dec, net_disc, netF)
+    unet, vae_enc, vae_dec, net_disc, netF, roma = accelerator.prepare(unet, vae_enc, vae_dec, net_disc, netF, roma)
     
     # Prepare trainable parameters and VAE wrappers
     params_gen = ContrastiveSDXL_Turbo.get_trainable_params(unet, vae)
 
-    # === Attach attention feature hook ===
-#     attn_hook = UNetAttentionHook(unet)
-    # attn_hook = UNetAttentionHook(unet, nce_layers=nce_layers)
+    # Initialiase CUT the Loses:
+    src_loss = SRC_Loss(args)
+    hDCE_loss = PatchHDCELoss(args)
 
+    # Initialiase the Loses:
+    iwarp_loss = IdentityWarpLoss()
+    crit_idt = torch.nn.L1Loss()
+
+    # === Attach attention feature hook ===
+    # --- DINO Attention Hook ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dino = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
     dino = dino.to(device)
@@ -221,7 +233,9 @@ def train(args):
 
     net_lpips = lpips.LPIPS(net='vgg')
     net_lpips.cuda()
-    net_lpips.requires_grad_(False)
+    for p in net_lpips.parameters():
+        p.requires_grad_(False)
+
     
     net_lpips, optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc = accelerator.prepare(
         net_lpips, optimizer_gen, optimizer_disc, train_dataloader, lr_scheduler_gen, lr_scheduler_disc
@@ -253,14 +267,6 @@ def train(args):
                 img_a = batch["pixel_values_src"]
                 img_b = batch["pixel_values_tgt"]
 
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # for name, img in [("A", img_a), ("B", img_b)]:
-                #     if torch.isnan(img).any() or torch.isinf(img).any():
-                #         print(f"⚠️ NaNs/Infs in input {name}:",
-                #             torch.isnan(img).sum().item(), torch.isinf(img).sum().item())
-                #     print(f"🔍 Range {name}: min {img.min().item():.4f}, max {img.max().item():.4f}")
-                # # ----------------------------------------------------------------------------------------------------------
-
                 bsz = img_a.shape[0]
 
                 time_ids_src = torch.tensor(batch["time_ids_src"], device=img_a.device).unsqueeze(0).repeat(bsz, 1)
@@ -268,23 +274,13 @@ def train(args):
 
                 fixed_prompt_embeds = fixed_prompt_embeds.repeat(bsz, 1, 1)
                 fixed_pooled_embeds = fixed_pooled_embeds.repeat(bsz, 1)
-
-                # Timesteps for 1-step DDIM
-                timesteps = torch.tensor(
-                    [noise_scheduler_1step.config.num_train_timesteps - 1] * bsz,
-                    device=img_a.device
-                ).long()
                 
                 dino_img_a = resize_for_dino(img_a)
                 # First-time initialization of netF (MLP heads) and its optimizer
                 if epoch == 0 and global_step == 0:
                     optimizer_netF = data_dependent_initialize(data=dino_img_a, netF=netF, unet=unet, vae_enc=vae_enc,
                                                                attn_hook=attn_hook, nce_layers=nce_layers, args=args,
-                                                               accelerator=accelerator,
-                                                               timestep=timesteps,
-                                                               prompt_embeds=fixed_prompt_embeds,
-                                                               pooled_embeds=fixed_pooled_embeds,
-                                                               time_ids=time_ids_src
+                                                               accelerator=accelerator
                                                                )
                     lr_scheduler_netF = get_scheduler(
                         args.lr_scheduler_netF,
@@ -302,111 +298,41 @@ def train(args):
                 # ---------------------------PW-CONTRASTIVE LOSS and Generator Objective (GAN)--------------------------
                 # ======================================================================================================
 
-                # 1) encode img_a
+                # encode img_a
                 lat_a = ContrastiveSDXL_Turbo.encode(img_a, vae_enc)
 
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(lat_a).any() or torch.isinf(lat_a).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_a).sum().item(), torch.isinf(lat_a).sum().item())
-                # print("lat_a range:", lat_a.min().item(), lat_a.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
-
-                # 2) Denoise once at the same time extract self-attention feature maps from real_A (source) image.
-                # These are intermediate features collected from down-block attention modules in the UNet,
-                # used later for computing semantic contrastive losses (SRC, HDCE).
-                fake_lat_a, _real_a_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_a, unet=unet,
-                                                                                        scheduler=noise_scheduler_1step,
-                                                                                        timesteps=timesteps,
+                # Denoise using UNet of SDXL-Turbo.
+                fake_lat_a, _ = ContrastiveSDXL_Turbo.denoise(latents=lat_a, unet=unet,
+                                                                                        scheduler=scheduler,
+                                                                                        timestep = timestep,
                                                                                         prompt_embeds=fixed_prompt_embeds,
                                                                                         pooled_embeds=fixed_pooled_embeds,
-                                                                                        time_ids=time_ids_src,
-                                                                                        attn_hook=attn_hook,
-                                                                                        nce_layers=nce_layers
-                                                                                       )
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(fake_lat_a).any() or torch.isinf(fake_lat_a).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(fake_lat_a).sum().item(), torch.isinf(fake_lat_a).sum().item())
-                # print("fake_lat_a range:", fake_lat_a.min().item(), fake_lat_a.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
+                                                                                        time_ids=time_ids_src)
 
-                # 3) decode back to pixels
+                # decode back to pixels
                 fake_b = ContrastiveSDXL_Turbo.decode(fake_lat_a, vae_dec)
 
-                # 1) encode img_a
+                # encode img_b
                 lat_b = ContrastiveSDXL_Turbo.encode(img_b, vae_enc)
 
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(lat_b).any() or torch.isinf(lat_b).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_b).sum().item(), torch.isinf(lat_b).sum().item())
-                # print("lat_b range:", lat_b.min().item(), lat_b.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
+                # Denoise 
+                idt_lat_b, _ = ContrastiveSDXL_Turbo.denoise(latents=lat_b, unet=unet,
+                                                                        scheduler=scheduler,
+                                                                        timestep = timestep,
+                                                                        prompt_embeds=fixed_prompt_embeds,
+                                                                        pooled_embeds=fixed_pooled_embeds,
+                                                                        time_ids=time_ids_tgt)
 
-                # 2) Denoise once at the same time extract self-attention feature maps from real B image..
-
-                idt_lat_b, _real_b_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_b, unet=unet,
-                                                                                       scheduler=noise_scheduler_1step,
-                                                                                       timesteps=timesteps,
-                                                                                       prompt_embeds=fixed_prompt_embeds,
-                                                                                       pooled_embeds=fixed_pooled_embeds,
-                                                                                       time_ids=time_ids_tgt,
-                                                                                       attn_hook=attn_hook,
-                                                                                       nce_layers=nce_layers
-                                                                                       )
-
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(idt_lat_b).any() or torch.isinf(idt_lat_b).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(idt_lat_b).sum().item(), torch.isinf(idt_lat_b).sum().item())
-                # print("idt_lat_b range:", idt_lat_b.min().item(), idt_lat_b.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
-
-                # 3) decode back to pixels
+                # decode back to pixels
                 idt_b = ContrastiveSDXL_Turbo.decode(idt_lat_b, vae_dec)
 
-                time_ids_fake_b = [512, 512, 0, 0, 512, 512]
-                time_ids_fake_b = torch.tensor(time_ids_fake_b, device=img_a.device).unsqueeze(0).repeat(bsz, 1)
-                time_ids_idt_b = time_ids_fake_b
-
-                # encode fake_b and idt_b
-                lat_fake_b = ContrastiveSDXL_Turbo.encode(fake_b, vae_enc)
-                lat_idt_b = ContrastiveSDXL_Turbo.encode(idt_b, vae_enc)
-
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(lat_fake_b).any() or torch.isinf(lat_fake_b).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_fake_b).sum().item(), torch.isinf(lat_fake_b).sum().item())
-                # print("lat_fake_b range:", lat_fake_b.min().item(), lat_fake_b.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
-
-                # #Debug block: ----------------------------------------------------------------------------------------------
-                # if torch.isnan(lat_idt_b).any() or torch.isinf(lat_idt_b).any():
-                #     print("⚠️ Bad latents from VAE:", torch.isnan(lat_idt_b).sum().item(), torch.isinf(lat_idt_b).sum().item())
-                # print("lat_idt_b range:", lat_idt_b.min().item(), lat_idt_b.max().item())
-                #  # ----------------------------------------------------------------------------------------------------------
-
-                # Extract self-attention feature maps from fake_B (translated) image.
-                # fake_b_features = attn_hook.extract_attention_features(latent=lat_fake_b, unet=unet, timestep=timesteps,
-                #                                                        text_embed=fixed_prompt_embeds,
-                #                                                        pooled_embed=fixed_pooled_embeds,
-                #                                                        time_ids=time_ids_fake_b, nce_layers=nce_layers)
-
-                # # Extract self-attention feature maps from identitiy B ('recreated') image.
-                # idt_b_features = attn_hook.extract_attention_features(latent=lat_idt_b, unet=unet, timestep=timesteps,
-                #                                                       text_embed=fixed_prompt_embeds,
-                #                                                       pooled_embed=fixed_pooled_embeds,
-                #                                                       time_ids=time_ids_idt_b, nce_layers=nce_layers)
-
-                # Extract self-attention feature maps from fake_B (translated) image - using DINOv2.
-                dino_img_b, dino_fake_b, dino_idt_b = resize_for_dino(img_b), resize_for_dino(fake_b), resize_for_dino(idt_b)
+                dino_fake_b = resize_for_dino(fake_b)
                 real_a_features = attn_hook.extract_attention_features(img = dino_img_a)   
-                real_b_features = attn_hook.extract_attention_features(img = dino_img_b)
                 fake_b_features = attn_hook.extract_attention_features(img = dino_fake_b)
-                idt_b_features = attn_hook.extract_attention_features(img = dino_idt_b)
-
 
                 # Sample contrastive patches using netF (MLPs)
                 fake_b_pool, sample_ids = netF(feats=fake_b_features, num_patches=args.num_patches, patch_ids=None)
                 real_a_pool, _ = netF(feats=real_a_features, num_patches=args.num_patches, patch_ids=sample_ids)
-                idt_b_pool, _ = netF(feats=idt_b_features, num_patches=args.num_patches, patch_ids=sample_ids)
-                real_b_pool, _ = netF(feats=real_b_features, num_patches=args.num_patches, patch_ids=sample_ids)
 
                 # Semantic Consistency Relation Loss
                 loss_SRC, weight = calculate_R_loss(src=real_a_pool, tgt=fake_b_pool, nce_layers=nce_layers,
@@ -419,8 +345,28 @@ def train(args):
                 else:
                     loss_hDCE = 0.0
 
-                # Backprop through contrastive losses
-                accelerator.backward(loss_hDCE + loss_SRC, retain_graph=False)
+                # =====================================ZeroFLow-Loss========================================
+                source = prep_for_roma(img_a) # Prepare source image for RoMa
+                target = prep_for_roma(fake_b) # Prepare target image for RoMa
+
+                warp, cert = roma.match(source, target, device=accelerator.device)
+
+                loss_iwarp = iwarp_loss(warp, cert)
+
+                lambda_w = lambda_warp(global_step, args)
+
+                zeroflow_loss = lambda_w * loss_iwarp
+                
+                # =====================================ZeroFLow-Loss========================================
+
+                # =======================================Identity-Loss======================================
+                loss_idt = 0
+                if args.dce_idt and args.lambda_idt > 0.0:
+                    loss_idt = crit_idt(img_b, idt_b) * args.lambda_idt
+                    loss_idt += net_lpips(img_b, idt_b).mean() * args.lambda_idt_lpips
+
+                # Backprop through all loses
+                accelerator.backward(loss_hDCE + loss_SRC + zeroflow_loss + loss_idt, retain_graph=False)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
 
@@ -433,64 +379,18 @@ def train(args):
                     lr_scheduler_netF.step()
                 optimizer_netF.zero_grad()
 
-                # loss_hDCE_idt = 0
-                # if args.dce_idt and args.lambda_HDCE > 0.0:
-                #     _, weight_idt = calculate_R_loss(src=real_b_pool, tgt=idt_b_pool, nce_layers=nce_layers,
-                #                                      src_loss=src_loss, args=args, only_weight=True,
-                #                                      epoch=epoch)
-                #     loss_hDCE_idt = calculate_HDCE_loss(src=real_b_pool, tgt=idt_b_pool, hDCE=hDCE_loss, args=args,
-                #                                         nce_layers=nce_layers, weight=weight_idt)
-                #     #  In original CycleGAN-Turbo work these losses are seperate and not combined together
-                #     total_hDCE_loss = (loss_hDCE + loss_hDCE_idt) * 0.5
-                # else:
-                #     total_hDCE_loss = loss_hDCE
-                    
-                
-                # # Backprop through contrastive losses
-                # accelerator.backward(total_hDCE_loss + loss_SRC, retain_graph=False)
-                # if accelerator.sync_gradients:
-                #     accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
-
-                # optimizer_gen.step()
-                # lr_scheduler_gen.step()
-                # optimizer_gen.zero_grad()
-
-                # if accelerator.sync_gradients:
-                #     optimizer_netF.step()
-                #     lr_scheduler_netF.step()
-                # optimizer_netF.zero_grad()
-
-                loss_idt = 0
-                if args.dce_idt and args.lambda_idt > 0.0:
-                    loss_idt = crit_idt(img_b, idt_b) * args.lambda_idt
-                    loss_idt += net_lpips(img_b, idt_b).mean() * args.lambda_idt_lpips
-
-                # Backprop through contrastive losses
-                accelerator.backward(loss_idt, retain_graph=False)
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
-
-                optimizer_gen.step()
-                lr_scheduler_gen.step()
-                optimizer_gen.zero_grad()
-
-
                 # ======================================================================================================
                 # ------------------------------------------- Generator Loss -------------------------------------------
 
                 lat_a = ContrastiveSDXL_Turbo.encode(img_a, vae_enc)
 
-                # TEST
-                fake_lat_a, real_a_features = ContrastiveSDXL_Turbo.denoise_and_extract(latents=lat_a, unet=unet,
-                                                                                        scheduler=noise_scheduler_1step,
-                                                                                        timesteps=timesteps,
-                                                                                        prompt_embeds=fixed_prompt_embeds,
-                                                                                        pooled_embeds=fixed_pooled_embeds,
-                                                                                        time_ids=time_ids_src,
-                                                                                        attn_hook=attn_hook,
-                                                                                        nce_layers=nce_layers
-                                                                                       )
- 
+                fake_lat_a, _ = ContrastiveSDXL_Turbo.denoise(latents=lat_a, unet=unet,
+                                                              scheduler=scheduler,
+                                                              timestep = timestep,
+                                                              prompt_embeds=fixed_prompt_embeds,
+                                                              pooled_embeds=fixed_pooled_embeds,
+                                                              time_ids=time_ids_src)
+
                 fake_b = ContrastiveSDXL_Turbo.decode(fake_lat_a, vae_dec)
 
 
@@ -540,11 +440,10 @@ def train(args):
                 logs = {}
                 logs["hDCE"] = loss_hDCE.detach().item()
                 logs["SRC"] = loss_SRC.detach().item()
+                logs["iwarp"] = zeroflow_loss.detach().item()
                 logs["gan"] = loss_gan.detach().item()
                 logs["disc"] = loss_D_fake.detach().item() + loss_D_real.detach().item()
-                # logs["idt"] = loss_hDCE_idt.detach().item()
                 logs["idt"] = loss_idt.detach().item()
-
 
                 if accelerator.sync_gradients:
                     progress_bar.update(1)

@@ -43,7 +43,6 @@ if __name__ == "__main__":
             model.unet.enable_xformers_memory_efficient_attention()
             print("🚀 xFormers memory-efficient attention enabled")
         except Exception as e:
-            # Should be rare, but just in case some xFormers API changed
             print(f"⚠️  Could not enable xFormers attention: {e}")
     else:
         print("ℹ️  xFormers not installed; using standard attention")
@@ -64,10 +63,10 @@ if __name__ == "__main__":
         time_ids = torch.tensor(time_ids, device=x_t.device)
         if args.use_fp16:
             x_t = x_t.half()
-        output = model(x_t, caption=args.prompt, time_ids = time_ids)
+        output = model(x_t, caption=args.prompt, time_ids = time_ids, denoise_steps=1)
 
     output_pil = transforms.ToPILImage()(output[0].cpu() * 0.5 + 0.5)
-    output_pil = output_pil.resize((input_image.width, input_image.height), Image.LANCZOS)  # Try Bicubic too
+    output_pil = output_pil.resize((input_image.width, input_image.height), Image.LANCZOS)  # Try LANCZOS,BICUBIC too
 
     # save the output image
     # bname = os.path.basename(args.input_image)

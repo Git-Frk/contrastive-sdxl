@@ -1,14 +1,17 @@
 import os
 import random
 import argparse
-import json
+from glob import glob
 import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import RandomCrop
 import torchvision.transforms.functional as F
-from glob import glob
+from losses.SRC import SRC_Loss, calculate_R_loss
+from losses.hDCE import PatchHDCELoss, calculate_HDCE_loss
+from models.dino_attn_hook import DINOAttentionHook, resize_for_dino
+from models.patch_network import PatchSampleF
 
 
 def parse_args_unpaired_training():
@@ -38,14 +41,23 @@ def parse_args_unpaired_training():
                         help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
+    # parser.add_argument("--scale_contrastive", action="store_true", help="Whether to scale contrastive loss by image size.")
+    # parser.add_argument("--contrastive_scales", type = dict, default={"high": 1.167, "mid": 1.0, "low": 0.5}, help="Scales for contrastive loss at different levels.")
 
     # args for the loss function
     parser.add_argument("--gan_disc_type", default="vagan_clip")
     parser.add_argument("--gan_loss_type", default="multilevel_sigmoid_s")
     parser.add_argument("--lambda_gan", default=0.5, type=float)  # for CUT paper code, it is 1.0
     
-    parser.add_argument("--lambda_idt_lpips", default=1.0, type=float)  # TEST
-    parser.add_argument("--lambda_idt", default=1.0, type=float)  # TEST
+    parser.add_argument("--lambda_idt_lpips", default=1.0, type=float)  
+    parser.add_argument("--lambda_idt", default=1.0, type=float)  
+
+    parser.add_argument("--lambda_mse", default=0.05, type=float)  
+
+    parser.add_argument('--lambda_warp_plateau', type=float, default=80, help='weight for identity warp loss from platueau_step to final_steps')
+    parser.add_argument('--lambda_warp_max', type=float, default=104, help=' max weight for identity warp loss-for the final_steps')
+    parser.add_argument('--plateau_step', type=int, default=2000, help='training step to start the weight plateauing')
+    parser.add_argument('--final_steps', type=int, default=10000, help='training step to start maximising/decaying the weight')
 
     parser.add_argument('--lambda_HDCE', type=float, default=1.0, help='weight for HDCE loss')
     parser.add_argument('--lambda_SRC', type=float, default=1.0, help='weight for SRC loss')
@@ -68,7 +80,7 @@ def parse_args_unpaired_training():
     parser.add_argument("--dataloader_num_workers", type=int, default=0)
     parser.add_argument("--train_batch_size", type=int, default=4,
                         help="Batch size (per device) for the training dataloader.")
-    parser.add_argument("--max_train_epochs", type=int, default=2)
+    parser.add_argument("--max_train_epochs", type=int, default=10)
     parser.add_argument("--max_train_steps", type=int, default=None)
 
     # args for the model
@@ -265,7 +277,7 @@ class UnpairedDataset(torch.utils.data.Dataset):
 
         Returns:
             dict with keys:
-              - 'pixel_values_src': preprocessed image tensor (3×H×W), float32, [-1, 1]
+              - 'pixel_values_src': preprocessed image tensor (3xHxW), float32, [-1, 1]
               - 'pixel_values_tgt': same as above
               - 'caption_src': str prompt for source image
               - 'caption_tgt': str prompt for target image
@@ -343,11 +355,7 @@ def data_dependent_initialize(
         attn_hook,
         nce_layers: list[int],
         args,
-        accelerator,
-        timestep: torch.Tensor,
-        prompt_embeds: torch.Tensor,
-        pooled_embeds: torch.Tensor,
-        time_ids: torch.Tensor
+        accelerator
 ):
     """
     Initializes netF using a single forward pass through UNet under the attention hook,
@@ -360,12 +368,6 @@ def data_dependent_initialize(
     with torch.no_grad():
         # with accelerator.autocast():
         latent = vae_enc(sample)
-
-        # # run UNet+hook to grab attention maps
-        # features = attn_hook.extract_attention_features(latent=latent, unet=unet, timestep=timestep,
-        #                                                 text_embed=prompt_embeds, pooled_embed=pooled_embeds,
-        #                                                 time_ids=time_ids,
-        #                                                 nce_layers=nce_layers)
 
     # Extract self-attention feature maps from fake_B (translated) image - using DINOv2.
         features = attn_hook.extract_attention_features(img = sample)
@@ -385,3 +387,117 @@ def data_dependent_initialize(
     attn_hook.clear()
 
     return optimizer_F
+
+
+def prep_for_roma(x: torch.Tensor) -> torch.Tensor:
+    """
+    Ensures tensor is channel-first (3xHxW) and in [0,1] float32,
+    ready for roma.match().
+    """
+    # Remove batch dim if (1, C, H, W)
+    if x.ndim == 4 and x.shape[0] == 1:
+        x = x[0]
+
+    # Ensure float
+    if not x.is_floating_point():
+        x = x.float()
+
+    # Convert from [-1, 1] → [0, 1], with clamping for safety
+    x = ((x + 1.0) * 0.5).clamp(0, 1)
+
+    return x
+
+
+
+def contrastive_at_scale(
+    real_a: torch.Tensor,
+    fake_b: torch.Tensor,
+    scale: float,
+    attn_hook: DINOAttentionHook,
+    netF: PatchSampleF,
+    src_loss: SRC_Loss,
+    hDCE_loss: PatchHDCELoss,
+    nce_layers: list[int],
+    args,
+    epoch: int
+):
+    """
+    Compute CUT-style contrastive losses (SRC + HDCE) for a single image pair at a specific spatial scale.
+
+    Parameters
+    ----------
+    real_a : torch.Tensor
+        Source (e.g. day) image tensor in [-1, 1], shape [1, 3, H, W].
+    fake_b : torch.Tensor
+        Translated (e.g. night) image tensor, same range/shape as `real_a`.
+    scale : float
+        Relative size factor (1.0 → 504 px, 0.5 → 252 px, …) at which to enforce consistency.
+    attn_hook : DINOAttentionHook
+        Frozen DINO-v2 extractor that returns a list of feature maps from the chosen transformer blocks-[nce_layers].
+    netF : PatchSampleF
+        Projection head that samples/normalises patches and applies layer-specific MLPs.
+    src_loss : SRC_Loss
+        Semantic-relation consistency loss.
+    hDCE_loss : PatchHDCELoss
+        Hard Dense Contrastive Estimation loss module.
+    nce_layers : list[int]
+        Indices of transformer blocks whose features are selected for the contrastive loss.
+    args : argparse.Namespace
+    epoch : int
+        Current epoch index (needed for curriculum scheduling inside SRC_Loss).
+
+    Returns
+    -------
+    loss_SRC : torch.Tensor
+        Mean SRC loss over the selected layers.
+    loss_HDCE : torch.Tensor
+        Mean hDCE loss over the selected layers (zero if λ_HDCE == 0).
+    """
+
+    # -------------------------------------------------------------
+    # Resize source & target to the requested resolution
+    # -------------------------------------------------------------
+    target_px   = int(round(504 * scale))
+    dino_img_a  = resize_for_dino(real_a,  size=target_px)
+    dino_fake_b = resize_for_dino(fake_b,  size=target_px)
+
+    # -------------------------------------------------------------
+    # Forward through frozen DINO to collect multi-layer features
+    # attn_hook returns a list[Tensor]-[[B, C, H', W']]
+    # -------------------------------------------------------------
+    real_feats = attn_hook.extract_attention_features(dino_img_a)
+    fake_feats = attn_hook.extract_attention_features(dino_fake_b)
+
+    # -------------------------------------------------------------
+    # Sample contrastive patches using netF (MLPs)
+    # -------------------------------------------------------------
+    fake_pool, sample_ids = netF(feats=fake_feats, num_patches=args.num_patches, patch_ids=None)
+    real_pool, _ = netF(feats=real_feats, num_patches=args.num_patches, patch_ids=sample_ids)
+
+    # -------------------------------------------------------------
+    # 4) SRC loss  (semantic consistency of spatial correlations)
+    # -------------------------------------------------------------
+    loss_SRC, weights = calculate_R_loss(
+        src=real_pool,
+        tgt=fake_pool,
+        nce_layers=nce_layers,
+        src_loss=src_loss,
+        args=args,
+        epoch=epoch,
+    )
+
+    # -------------------------------------------------------------
+    # 5) hDCE loss (optional hard-negative mining)
+    # -------------------------------------------------------------
+    loss_HDCE = 0.0
+    if args.lambda_HDCE > 0.0:
+        loss_HDCE = calculate_HDCE_loss(
+            src=real_pool,
+            tgt=fake_pool,
+            hDCE=hDCE_loss,
+            args=args,
+            nce_layers=nce_layers,
+            weight=weights,
+        )
+
+    return loss_SRC, loss_HDCE
