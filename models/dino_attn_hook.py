@@ -38,7 +38,7 @@ class DINOAttentionHook:
                                 return
                             feat = output[:, 1:, :] if N > 1 and output.shape[1] == N else output  # Remove CLS if exists
                             feat = feat.permute(0, 2, 1).reshape(B, C, spatial, spatial)  # [B, C, H, W]
-                            self.attn_features.append(feat.detach().to(self.device))
+                            self.attn_features.append(feat.to(self.device))
                     return _hook_fn
                 handle = block.register_forward_hook(make_hook(i=idx))
                 self.handles.append(handle)
