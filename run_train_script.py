@@ -20,6 +20,7 @@ def main():
       --dce_idt \
       --enable_xformers_memory_efficient_attention \
       --gradient_checkpointing \
+      --mixed_precision="bf16" \
       --report_to="wandb" \
       --tracker_project_name="day2night-baseline-debug" \
       --validation_steps=250

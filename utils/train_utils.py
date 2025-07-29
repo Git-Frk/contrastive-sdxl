@@ -41,9 +41,7 @@ def parse_args_unpaired_training():
                         help='compute NCE loss on which layers')  
     parser.add_argument('--nce_includes_all_negatives_from_minibatch', type=bool, nargs='?', const=True, default=False,
                         help='(used for single image translation) If True, include the negatives from the other samples of the minibatch.')
-    # parser.add_argument("--scale_contrastive", action="store_true", help="Whether to scale contrastive loss by image size.")
-    # parser.add_argument("--contrastive_scales", type = dict, default={"high": 1.167, "mid": 1.0, "low": 0.5}, help="Scales for contrastive loss at different levels.")
-
+    
     # args for the loss function
     parser.add_argument("--gan_disc_type", default="vagan_clip")
     parser.add_argument("--gan_loss_type", default="multilevel_sigmoid_s")
@@ -87,7 +85,7 @@ def parse_args_unpaired_training():
     parser.add_argument("--pretrained_model_name_or_path", default="stabilityai/sdxl-turbo")
     parser.add_argument("--revision", default=None, type=str)
     parser.add_argument("--variant", default=None, type=str)
-    parser.add_argument("--lora_rank_unet", default=64, type=int)
+    parser.add_argument("--lora_rank_unet", default=128, type=int)
     parser.add_argument("--lora_rank_vae", default=4, type=int)
 
     # args for validation and logging
@@ -123,6 +121,7 @@ def parse_args_unpaired_training():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
 
     # memory saving options
+    parser.add_argument("--mixed_precision", type=str, default='no', choices=["no", "fp16", "bf16"], help="Enable mixed-precision training")
     parser.add_argument("--allow_tf32", action="store_true",
                         help=(
                             "Whether or not to alloF32 on Ampere GPUs. Can be used to speed up training. For more information, see"

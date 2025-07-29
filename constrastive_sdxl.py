@@ -89,7 +89,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         # One-step DDPM scheduler 
         self.scheduler = make_1step_sched()
-        self.timestep = 239
+        self.timestep = 499
 
         # Initialize VAE with LoRA adapters and skip connection layers
         vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae")
@@ -250,7 +250,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
         eps_pred = model_out.sample
 
         #  Denoised‑latent  
-        denoised_latent  = scheduler.step(eps_pred, ts, noisy_lantent, return_dict=True).pred_original_sample         
+        denoised_latent  = scheduler.step(eps_pred, ts, noisy_lantent, return_dict=True).prev_sample         
         return denoised_latent, None
     
     @staticmethod
@@ -311,7 +311,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
     # ==================================================Inference Code=============================================================
 
     @staticmethod
-    def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, prompt_embeds, pooled_embeds, time_ids, denoise_steps):
+    def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, prompt_embeds, pooled_embeds, time_ids):
         """
         Forward pass through the VAE encoder, UNet, and VAE decoder.
     
@@ -344,12 +344,12 @@ class ContrastiveSDXL_Turbo(nn.Module):
             ).sample
 
         #  Denoised‑latent pass 
-        denoised_latent  = sched.step(eps_pred, ts, noisy_lantent, return_dict=True).pred_original_sample  
+        denoised_latent  = sched.step(eps_pred, ts, noisy_lantent, return_dict=True).prev_sample  
         x_out = vae_dec(denoised_latent)                
 
         return x_out         
         
-    def forward(self, x_t, caption=None, caption_emb=None, time_ids=None, denoise_steps=4):
+    def forward(self, x_t, caption=None, caption_emb=None, time_ids=None):
         """
         SDXL-Turbo forward pass with dual-tokenizer and dual-encoder prompt processing 
         NOTE: only used in inference.py file.
