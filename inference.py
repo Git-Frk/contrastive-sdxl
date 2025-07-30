@@ -63,7 +63,7 @@ if __name__ == "__main__":
         time_ids = torch.tensor(time_ids, device=x_t.device)
         if args.use_fp16:
             x_t = x_t.half()
-        output = model(x_t, caption=args.prompt, time_ids = time_ids, denoise_steps=1)
+        output = model(x_t, caption=args.prompt, time_ids = time_ids)
 
     output_pil = transforms.ToPILImage()(output[0].cpu() * 0.5 + 0.5)
     output_pil = output_pil.resize((input_image.width, input_image.height), Image.LANCZOS)  # Try LANCZOS,BICUBIC too

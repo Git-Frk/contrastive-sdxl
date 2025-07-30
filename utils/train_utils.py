@@ -85,7 +85,7 @@ def parse_args_unpaired_training():
     parser.add_argument("--pretrained_model_name_or_path", default="stabilityai/sdxl-turbo")
     parser.add_argument("--revision", default=None, type=str)
     parser.add_argument("--variant", default=None, type=str)
-    parser.add_argument("--lora_rank_unet", default=128, type=int)
+    parser.add_argument("--lora_rank_unet", default=64, type=int)
     parser.add_argument("--lora_rank_vae", default=4, type=int)
 
     # args for validation and logging
