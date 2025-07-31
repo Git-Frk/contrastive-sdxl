@@ -44,6 +44,7 @@ def train(args):
         log_with=args.report_to
     )
     set_seed(args.seed)
+    grad_accum = args.gradient_accumulation_steps
 
     if accelerator.is_main_process:
         os.makedirs(os.path.join(args.output_dir, "checkpoints"), exist_ok=True)
@@ -70,6 +71,7 @@ def train(args):
 
     scheduler = make_1step_sched()
     timestep = 499
+    # timestep = torch.tensor(scheduler.config.num_train_timesteps - 1)
 
     # === Initialize UNet and VAE with LoRA setup ===
     unet, l_modules_unet_encoder, l_modules_unet_decoder, l_modules_unet_others = initialize_unet(weight_dtype,
@@ -267,7 +269,7 @@ def train(args):
     for epoch in range(first_epoch, args.max_train_epochs):
         for step, batch in enumerate(train_dataloader):
             # Accumulate gradients over these modules
-            l_acc = [unet, net_disc, vae_enc, vae_dec]
+            l_acc = [unet, net_disc, vae_enc, vae_dec, netF]
             with accelerator.accumulate(*l_acc):
                 with accelerator.autocast():
                     # Load images and cast to correct dtype
@@ -362,7 +364,7 @@ def train(args):
 
                     lambda_w = lambda_warp(global_step, args)
 
-                    zeroflow_loss = lambda_w * loss_iwarp
+                    zeroflow_loss = lambda_w * loss_iwarp * 0
                     
                     # =====================================ZeroFLow-Loss========================================
 
@@ -372,86 +374,48 @@ def train(args):
                         loss_idt = crit_idt(img_b, idt_b) * args.lambda_idt
                         loss_idt += net_lpips(img_b, idt_b).mean() * args.lambda_idt_lpips
 
-                # Backprop through all loses
-                accelerator.backward(loss_hDCE + loss_SRC + zeroflow_loss + loss_idt, retain_graph=False)
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
-
-                optimizer_gen.step()
-                lr_scheduler_gen.step()
-                optimizer_gen.zero_grad()
-
-                if accelerator.sync_gradients:
-                    optimizer_netF.step()
-                    lr_scheduler_netF.step()
-                optimizer_netF.zero_grad()
-
                 # ======================================================================================================
-                # ------------------------------------------- Generator Loss -------------------------------------------
-                with accelerator.autocast():
-                    lat_a = ContrastiveSDXL_Turbo.encode(img_a, vae_enc)
-
-                    fake_lat_a, _ = ContrastiveSDXL_Turbo.denoise(latents=lat_a, unet=unet,
-                                                                scheduler=scheduler,
-                                                                timestep = timestep,
-                                                                prompt_embeds=fixed_prompt_embeds,
-                                                                pooled_embeds=fixed_pooled_embeds,
-                                                                time_ids=time_ids_src)
-
-                    fake_b = ContrastiveSDXL_Turbo.decode(fake_lat_a, vae_dec)
-
-
-                    # Compute adversarial loss (realisticness of fake_b)
-                    loss_gan = net_disc(fake_b, for_G=True).mean() * args.lambda_gan
-                accelerator.backward(loss_gan, retain_graph=False)
-
-                # Backprop through GAN objective
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
-
-                # Apply updates
-                optimizer_gen.step()
-                lr_scheduler_gen.step()
-                optimizer_gen.zero_grad()
-                optimizer_disc.zero_grad()
-
-                if accelerator.sync_gradients:
-                    optimizer_netF.step()
-                    lr_scheduler_netF.step()
-                optimizer_netF.zero_grad()
-
-                # ======================================================================================================
-                # -------------------------Discriminator objective for task a->b(fake images) --------------------------
+                # --------------------------------Discriminator objective for task a->b---------------------------------
                 # ======================================================================================================
                 with accelerator.autocast():
                     loss_D_fake = net_disc(fake_b.detach(), for_real=False).mean() * args.lambda_gan
-                accelerator.backward(loss_D_fake, retain_graph=False)
+                    loss_D_real = net_disc(img_b, for_real=True).mean() * args.lambda_gan
+                    loss_D = loss_D_fake + loss_D_real
+                accelerator.backward(loss_D/grad_accum, retain_graph=False)
                 if accelerator.sync_gradients:
                     params_to_clip = list(net_disc.parameters())
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                optimizer_disc.step()
-                lr_scheduler_disc.step()
-                optimizer_disc.zero_grad()
+                    optimizer_disc.step()
+                    lr_scheduler_disc.step()
+                    optimizer_disc.zero_grad()
 
                 # ======================================================================================================
-                # ----------------------------Discriminator objective for real images ----------------------------------
+                # ------------------------------------------- Generator Loss -------------------------------------------
                 # ======================================================================================================
                 with accelerator.autocast():
-                    loss_D_real = net_disc(img_b, for_real=True).mean() * args.lambda_gan
-                accelerator.backward(loss_D_real, retain_graph=False)
+
+                    # Compute adversarial loss (realisticness of fake_b)
+                    loss_gan = net_disc(fake_b, for_G=True).mean() * args.lambda_gan
+                    # Compute total loss
+                    total_loss = loss_hDCE + loss_SRC + zeroflow_loss + loss_idt + loss_gan
+
+                # Backprop through all loses
+                accelerator.backward(total_loss/grad_accum, retain_graph=False)
                 if accelerator.sync_gradients:
-                    params_to_clip = list(net_disc.parameters())
-                    accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                optimizer_disc.step()
-                lr_scheduler_disc.step()
-                optimizer_disc.zero_grad()
+                    accelerator.clip_grad_norm_(params_gen, args.max_grad_norm)
+                    optimizer_gen.step()
+                    lr_scheduler_gen.step()
+                    optimizer_gen.zero_grad()
+                    optimizer_netF.step()
+                    lr_scheduler_netF.step()
+                    optimizer_netF.zero_grad()
 
                 logs = {}
                 logs["hDCE"] = loss_hDCE.detach().item()
                 logs["SRC"] = loss_SRC.detach().item()
                 logs["iwarp"] = zeroflow_loss.detach().item()
                 logs["gan"] = loss_gan.detach().item()
-                logs["disc"] = loss_D_fake.detach().item() + loss_D_real.detach().item()
+                logs["disc"] = loss_D.detach().item()
                 logs["idt"] = loss_idt.detach().item()
 
                 if accelerator.sync_gradients:

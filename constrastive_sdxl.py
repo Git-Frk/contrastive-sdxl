@@ -90,6 +90,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
         # One-step DDPM scheduler 
         self.scheduler = make_1step_sched()
         self.timestep = 499
+        # self.timestep = torch.tensor(self.scheduler.config.num_train_timesteps - 1)
 
         # Initialize VAE with LoRA adapters and skip connection layers
         vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae")
@@ -421,7 +422,6 @@ class ContrastiveSDXL_Turbo(nn.Module):
             self.timestep,
             prompt_embeds,
             pooled_embeds,
-            time_ids, 
-            denoise_steps=denoise_steps
+            time_ids
         )
 
