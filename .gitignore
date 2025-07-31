@@ -54,3 +54,5 @@ logs/error_265515.log
 logs/output_265515.log
 inference_script.py
 .gitignore
+del_ckpts.py
+clean_outputs.py
