@@ -52,7 +52,7 @@ def charbonnier(res2, eps2, alpha):
 # ------------------------------------------------------------------
 class IdentityWarpLoss(torch.nn.Module):
     """
-    Penalises *any* geometric drift introduced by the generator.
+    Penalises any geometric drift introduced by the generator.
 
     • Uses both halves of RoMa's symmetric warp (A→B and B→A).
     • Per-pixel weight is RoMa's certainty **after** sigmoid.

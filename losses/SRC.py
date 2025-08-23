@@ -1,7 +1,10 @@
 from packaging import version
 import torch
 from torch import nn
+from utils.train_utils import ScheduleLambda
 
+
+SRC_sched = ScheduleLambda('SRC_loss')  # schedule SRC and hDCE lambdas
 
 class Normalize(nn.Module):
 
@@ -85,7 +88,7 @@ class SRC_Loss(nn.Module):
         return out
 
 
-def calculate_R_loss(src, tgt, nce_layers, src_loss, args, only_weight=False, epoch=None):
+def calculate_R_loss(src, tgt, nce_layers, src_loss, args, step, only_weight=False, epoch=None):
     n_layers = len(nce_layers)
     crit = src_loss
 
@@ -96,6 +99,7 @@ def calculate_R_loss(src, tgt, nce_layers, src_loss, args, only_weight=False, ep
     weights = []
     for f_q, f_k in zip(feat_q_pool, feat_k_pool):
         loss_SRC, weight = crit(f_q, f_k, only_weight, epoch)
-        total_SRC_loss += loss_SRC * args.lambda_SRC
+        lambda_SRC = args.lambda_SRC * SRC_sched(step)
+        total_SRC_loss += loss_SRC * lambda_SRC
         weights.append(weight)
     return total_SRC_loss / n_layers, weights

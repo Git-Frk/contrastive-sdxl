@@ -11,14 +11,14 @@ def main():
       --train_img_prep="sdxl_random_crop_512" \
       --val_img_prep="no_resize" \
       --learning_rate=1e-5 \
-      --max_train_steps=12400 \
+      --max_train_steps=12500 \
       --train_batch_size=1 \
       --gradient_accumulation_steps=1 \
-      --lambda_gan=1.0 \
-      --lambda_HDCE=0.35 \
-      --lambda_SRC=0.35 \
+      --lambda_gan=0.5 \
+      --lambda_HDCE=0.5 \
+      --lambda_SRC=0.5 \
       --dce_idt \
-      --lambda_idt=0.5
+      --lambda_idt=0.5 \
       --enable_xformers_memory_efficient_attention \
       --gradient_checkpointing \
       --mixed_precision="bf16" \

@@ -8,8 +8,6 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import RandomCrop
 import torchvision.transforms.functional as F
-from losses.SRC import SRC_Loss, calculate_R_loss
-from losses.hDCE import PatchHDCELoss, calculate_HDCE_loss
 from models.dino_attn_hook import DINOAttentionHook, resize_for_dino
 from models.patch_network import PatchSampleF
 
@@ -45,12 +43,10 @@ def parse_args_unpaired_training():
     # args for the loss function
     parser.add_argument("--gan_disc_type", default="vagan_clip")
     parser.add_argument("--gan_loss_type", default="multilevel_sigmoid_s")
-    parser.add_argument("--lambda_gan", default=0.5, type=float)  # for CUT paper code, it is 1.0
+    parser.add_argument("--lambda_gan", default=0.5, type=float)  
     
     parser.add_argument("--lambda_idt_lpips", default=1.0, type=float)  
     parser.add_argument("--lambda_idt", default=1.0, type=float)  
-
-    parser.add_argument("--lambda_mse", default=0.05, type=float)  
 
     parser.add_argument('--lambda_warp_plateau', type=float, default=80, help='weight for identity warp loss from platueau_step to final_steps')
     parser.add_argument('--lambda_warp_max', type=float, default=104, help=' max weight for identity warp loss-for the final_steps')
@@ -407,96 +403,34 @@ def prep_for_roma(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+# schedule lambda for the losses - Half-open intervals [start, end), except the last one includes 12500
+class ScheduleLambda(nn.Module):
+    def __init__(self, loss: str):
+        super().__init__()
+        if loss == 'idt_loss':
+            edges  = [0, 1000, 3000, 6000, 9000, 12501]                  # 5 bins
+            values = [0.10, 0.25, 0.50, 0.75, 1.00]
+        elif loss == 'SRC_loss':
+            edges  = [0, 500, 1500, 2500, 3500, 4500, 8500, 10500, 12501] # 8 bins
+            # values = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.70, 1.00]
+            values = [0.01, 0.05, 0.1, 0.15, 0.25, 0.50, 0.70, 1.00]
+        elif loss == 'hDCE_loss':
+            edges  = [0, 500, 1500, 2500, 3500, 4500, 8500, 10500, 12501] # 8 bins
+            # values = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.70, 1.00]
+            values = [0.01, 0.05, 0.1, 0.15, 0.25, 0.50, 0.70, 1.00]
+        else:
+            raise ValueError(f"Unknown loss schedule: {loss}")
 
-def contrastive_at_scale(
-    real_a: torch.Tensor,
-    fake_b: torch.Tensor,
-    scale: float,
-    attn_hook: DINOAttentionHook,
-    netF: PatchSampleF,
-    src_loss: SRC_Loss,
-    hDCE_loss: PatchHDCELoss,
-    nce_layers: list[int],
-    args,
-    epoch: int
-):
-    """
-    Compute CUT-style contrastive losses (SRC + HDCE) for a single image pair at a specific spatial scale.
+        self.register_buffer("edges",  torch.tensor(edges,  dtype=torch.long))
+        self.register_buffer("values", torch.tensor(values, dtype=torch.float32))
 
-    Parameters
-    ----------
-    real_a : torch.Tensor
-        Source (e.g. day) image tensor in [-1, 1], shape [1, 3, H, W].
-    fake_b : torch.Tensor
-        Translated (e.g. night) image tensor, same range/shape as `real_a`.
-    scale : float
-        Relative size factor (1.0 → 504 px, 0.5 → 252 px, …) at which to enforce consistency.
-    attn_hook : DINOAttentionHook
-        Frozen DINO-v2 extractor that returns a list of feature maps from the chosen transformer blocks-[nce_layers].
-    netF : PatchSampleF
-        Projection head that samples/normalises patches and applies layer-specific MLPs.
-    src_loss : SRC_Loss
-        Semantic-relation consistency loss.
-    hDCE_loss : PatchHDCELoss
-        Hard Dense Contrastive Estimation loss module.
-    nce_layers : list[int]
-        Indices of transformer blocks whose features are selected for the contrastive loss.
-    args : argparse.Namespace
-    epoch : int
-        Current epoch index (needed for curriculum scheduling inside SRC_Loss).
-
-    Returns
-    -------
-    loss_SRC : torch.Tensor
-        Mean SRC loss over the selected layers.
-    loss_HDCE : torch.Tensor
-        Mean hDCE loss over the selected layers (zero if λ_HDCE == 0).
-    """
-
-    # -------------------------------------------------------------
-    # Resize source & target to the requested resolution
-    # -------------------------------------------------------------
-    target_px   = int(round(504 * scale))
-    dino_img_a  = resize_for_dino(real_a,  size=target_px)
-    dino_fake_b = resize_for_dino(fake_b,  size=target_px)
-
-    # -------------------------------------------------------------
-    # Forward through frozen DINO to collect multi-layer features
-    # attn_hook returns a list[Tensor]-[[B, C, H', W']]
-    # -------------------------------------------------------------
-    real_feats = attn_hook.extract_attention_features(dino_img_a)
-    fake_feats = attn_hook.extract_attention_features(dino_fake_b)
-
-    # -------------------------------------------------------------
-    # Sample contrastive patches using netF (MLPs)
-    # -------------------------------------------------------------
-    fake_pool, sample_ids = netF(feats=fake_feats, num_patches=args.num_patches, patch_ids=None)
-    real_pool, _ = netF(feats=real_feats, num_patches=args.num_patches, patch_ids=sample_ids)
-
-    # -------------------------------------------------------------
-    # 4) SRC loss  (semantic consistency of spatial correlations)
-    # -------------------------------------------------------------
-    loss_SRC, weights = calculate_R_loss(
-        src=real_pool,
-        tgt=fake_pool,
-        nce_layers=nce_layers,
-        src_loss=src_loss,
-        args=args,
-        epoch=epoch,
-    )
-
-    # -------------------------------------------------------------
-    # 5) hDCE loss (optional hard-negative mining)
-    # -------------------------------------------------------------
-    loss_HDCE = 0.0
-    if args.lambda_HDCE > 0.0:
-        loss_HDCE = calculate_HDCE_loss(
-            src=real_pool,
-            tgt=fake_pool,
-            hDCE=hDCE_loss,
-            args=args,
-            nce_layers=nce_layers,
-            weight=weights,
-        )
-
-    return loss_SRC, loss_HDCE
+    def forward(self, step):
+        """
+        step: int, scalar tensor, or tensor of any shape
+        Returns tensor of same shape with scheduled lambdas.
+        Half-open bins [start, end), final bin includes 12500 via 12501 trick.
+        """
+        step_t = torch.as_tensor(step, dtype=torch.long, device=self.edges.device)
+        idx = torch.bucketize(step_t, self.edges, right=False) - 1
+        idx = idx.clamp(0, self.values.numel() - 1)
+        return self.values[idx]

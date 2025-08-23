@@ -1,7 +1,10 @@
 from packaging import version
 import torch
 from torch import nn
+from utils.train_utils import ScheduleLambda
 
+
+hDCE_sched = ScheduleLambda('hDCE_loss')  # schedule SRC and hDCE lambdas
 
 class PatchHDCELoss(nn.Module):
     def __init__(self, args):
@@ -53,7 +56,7 @@ class PatchHDCELoss(nn.Module):
         return loss
 
 
-def calculate_HDCE_loss(src, tgt, hDCE, args, nce_layers, weight=None):
+def calculate_HDCE_loss(src, tgt, hDCE, args, nce_layers, step, weight=None):
     n_layers = len(nce_layers)
     crit = hDCE
 
@@ -64,7 +67,8 @@ def calculate_HDCE_loss(src, tgt, hDCE, args, nce_layers, weight=None):
     for f_q, f_k, w in zip(feat_q_pool, feat_k_pool, weight):
         if args.no_Hneg:
             w = None
-        loss = crit(f_q, f_k, w) * args.lambda_HDCE
+        lambda_HDCE = args.lambda_HDCE * hDCE_sched(step)
+        loss = crit(f_q, f_k, w) * lambda_HDCE
         total_HDCE_loss += loss.mean()
 
     return total_HDCE_loss / n_layers

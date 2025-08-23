@@ -56,3 +56,4 @@ inference_script.py
 .gitignore
 del_ckpts.py
 clean_outputs.py
+translate_images.py
