@@ -1,10 +1,10 @@
 from packaging import version
 import torch
 from torch import nn
-from utils.train_utils import ScheduleLambda
+from utils.train_utils import ScheduleLambda, LinearSchedule
 
 
-SRC_sched = ScheduleLambda('SRC_loss')  # schedule SRC and hDCE lambdas
+SRC_sched = LinearSchedule()# linear schedule SRC lambda
 
 class Normalize(nn.Module):
 

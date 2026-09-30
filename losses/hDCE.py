@@ -1,10 +1,10 @@
 from packaging import version
 import torch
 from torch import nn
-from utils.train_utils import ScheduleLambda
+from utils.train_utils import ScheduleLambda, LinearSchedule
 
 
-hDCE_sched = ScheduleLambda('hDCE_loss')  # schedule SRC and hDCE lambdas
+hDCE_sched = LinearSchedule()  # linear schedule  hDCE lambdas
 
 class PatchHDCELoss(nn.Module):
     def __init__(self, args):

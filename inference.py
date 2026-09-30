@@ -24,11 +24,9 @@ if __name__ == "__main__":
         raise ValueError('Either model_name or model_path should be provided')
 
     if args.model_path is not None and args.prompt is None:
-        # raise ValueError('prompt is required when loading a custom model_path.')
-        # args.prompt = ("Driving at night. Artificial lights are accurately positioned: streetlights cast a glow on sidewalks, "
-        #                "car headlights illuminate the road with focused beams, and building windows emit a soft interior light. "
-        #                "Shadows and reflections follow realworld physics, with ambient darkness ensuring that all illumination comes from natural sources.")
-        args.prompt = ("Driving at night.")
+        raise ValueError('prompt is required when loading a custom model_path.')
+        # print('⚠️  Warning: prompt is not provided when loading a custom model_path. Using a default prompt.')
+        # args.prompt = ("Driving at night.")
 
     if args.model_name is not None:
         assert args.prompt is None, 'prompt is not required when loading a pretrained model.'
@@ -45,7 +43,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️  Could not enable xFormers attention: {e}")
     else:
-        print("ℹ️  xFormers not installed; using standard attention")
+        print("xFormers not installed; using standard attention")
 
         if args.use_fp16:
             model.half()

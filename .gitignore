@@ -21,7 +21,12 @@ venv/
 # test checkpoint folder
 misc/
 # custom VAE checkpoints
-/home/672511/contrastive-sdxl/models/vae/checkpoints
+models/vae/checkpoints
+# YOLO11 training dataset
+models/yolo11/datasets
+models/yolo11_det/datasets
+# YOLO11 run files
+models/yolo11_det/runs
 # ======================
 # Ignored Files
 # ======================
@@ -57,3 +62,6 @@ inference_script.py
 del_ckpts.py
 clean_outputs.py
 translate_images.py
+runs/detect/train/args.yaml
+runs/detect/train2/args.yaml
+yolo_loss_debug_temp.py

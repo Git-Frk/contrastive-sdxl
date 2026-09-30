@@ -8,8 +8,6 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import RandomCrop
 import torchvision.transforms.functional as F
-from models.dino_attn_hook import DINOAttentionHook, resize_for_dino
-from models.patch_network import PatchSampleF
 
 
 def parse_args_unpaired_training():
@@ -47,6 +45,9 @@ def parse_args_unpaired_training():
     
     parser.add_argument("--lambda_idt_lpips", default=1.0, type=float)  
     parser.add_argument("--lambda_idt", default=1.0, type=float)  
+
+    parser.add_argument('--det_loss', action='store_true')
+    parser.add_argument("--lambda_det", default=1.0, type=float) 
 
     parser.add_argument('--lambda_warp_plateau', type=float, default=80, help='weight for identity warp loss from platueau_step to final_steps')
     parser.add_argument('--lambda_warp_max', type=float, default=104, help=' max weight for identity warp loss-for the final_steps')
@@ -286,6 +287,10 @@ class UnpairedDataset(torch.utils.data.Dataset):
         # Target image always sampled randomly
         img_path_tgt = random.choice(self.l_imgs_tgt)
 
+        # Getting the image names
+        stem_src = os.path.splitext(os.path.basename(img_path_src))[0]
+        stem_tgt = os.path.splitext(os.path.basename(img_path_tgt))[0]
+
         # Load and transform images
         img_pil_src = Image.open(img_path_src).convert("RGB")
         img_pil_tgt = Image.open(img_path_tgt).convert("RGB")
@@ -308,11 +313,12 @@ class UnpairedDataset(torch.utils.data.Dataset):
             img_pil_src = F.crop(img_pil_src, i_src, j_src, h_crop, w_crop)
             img_pil_tgt = F.crop(img_pil_tgt, i_tgt, j_tgt, h_crop, w_crop)
 
-            # Random Horizontal Flip
+            flip_src = False
+            flip_tgt = False
             if random.random() < 0.5:
-                img_pil_src = F.hflip(img_pil_src)
+                img_pil_src = F.hflip(img_pil_src); flip_src = True
             if random.random() < 0.5:
-                img_pil_tgt = F.hflip(img_pil_tgt)
+                img_pil_tgt = F.hflip(img_pil_tgt); flip_tgt = True
 
             # Construct time_ids
             time_ids_src = [h_original_src, w_original_src, i_src, j_src, h_crop, w_crop]
@@ -340,6 +346,12 @@ class UnpairedDataset(torch.utils.data.Dataset):
             "caption_tgt": self.fixed_caption_tgt,
             "time_ids_src": time_ids_src,
             "time_ids_tgt": time_ids_tgt,
+            "flip_src": flip_src,
+            "flip_tgt": flip_tgt,
+            "stem_src": stem_src,
+            "stem_tgt": stem_tgt,
+            "path_src": img_path_src,
+            "path_tgt": img_path_tgt,
         }
 
 def data_dependent_initialize(
@@ -412,11 +424,9 @@ class ScheduleLambda(nn.Module):
             values = [0.10, 0.25, 0.50, 0.75, 1.00]
         elif loss == 'SRC_loss':
             edges  = [0, 500, 1500, 2500, 3500, 4500, 8500, 10500, 12501] # 8 bins
-            # values = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.70, 1.00]
             values = [0.01, 0.05, 0.1, 0.15, 0.25, 0.50, 0.70, 1.00]
         elif loss == 'hDCE_loss':
             edges  = [0, 500, 1500, 2500, 3500, 4500, 8500, 10500, 12501] # 8 bins
-            # values = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.70, 1.00]
             values = [0.01, 0.05, 0.1, 0.15, 0.25, 0.50, 0.70, 1.00]
         else:
             raise ValueError(f"Unknown loss schedule: {loss}")
@@ -434,3 +444,31 @@ class ScheduleLambda(nn.Module):
         idx = torch.bucketize(step_t, self.edges, right=False) - 1
         idx = idx.clamp(0, self.values.numel() - 1)
         return self.values[idx]
+    
+
+class LinearSchedule(nn.Module):
+    def __init__(self, start=0.01, end=1.0, max_steps=12000, start_step=0):
+        """
+        Args:
+            start: lambda value at start_step
+            end: lambda value at max_steps
+            max_steps: step where ramp finishes
+            start_step: step where ramp begins (lambda = 0 before this)
+        """
+        super().__init__()
+        self.start = start
+        self.end = end
+        self.max_steps = max_steps
+        self.start_step = start_step
+
+    def forward(self, step):
+        step_t = torch.as_tensor(step, dtype=torch.float32)
+
+        before_start = step_t < self.start_step
+
+        frac = (step_t - self.start_step) / (self.max_steps - self.start_step)
+        frac = frac.clamp(0, 1)
+
+        value = self.start + frac * (self.end - self.start)
+        return torch.where(before_start, torch.zeros_like(value), value) # Returns x where condition=True, otherwise y.
+    

@@ -6,13 +6,11 @@ import torch.nn as nn
 from transformers import AutoTokenizer, CLIPTextModel, CLIPTextModelWithProjection
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from peft import LoraConfig
-from peft.utils import get_peft_model_state_dict
 import torch.nn.functional as F
 p = "models/vae/"
 sys.path.append(p)
-from utils.ddpm_utils import make_1step_sched, make_4step_sched
+from utils.ddpm_utils import make_sched
 from models.vae.custom_vae_forward import custom_vae_encoder_fwd, custom_vae_decoder_fwd
-from diffusers import DDPMScheduler
 
 
 class VAE_encode(nn.Module):
@@ -88,9 +86,8 @@ class ContrastiveSDXL_Turbo(nn.Module):
         self.text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("stabilityai/sdxl-turbo", subfolder="text_encoder_2").cuda()
 
         # One-step DDPM scheduler 
-        self.scheduler = make_1step_sched()
-        self.timestep = 499
-        # self.timestep = torch.tensor(self.scheduler.config.num_train_timesteps - 1)
+        self.scheduler = make_sched()
+        self.timestep = self.scheduler.timesteps[0]
 
         # Initialize VAE with LoRA adapters and skip connection layers
         vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-turbo", subfolder="vae")
@@ -237,8 +234,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
         """
 
         B = latents.shape[0]
-
-        ts = torch.full((B,), timestep, device=latents.device, dtype=torch.long)
+        ts = timestep
 
         noisy_lantent = latents
 
@@ -249,10 +245,10 @@ class ContrastiveSDXL_Turbo(nn.Module):
             )
             
         eps_pred = model_out.sample
-
-        #  Denoised‑latent  
-        denoised_latent  = scheduler.step(eps_pred, ts, noisy_lantent, return_dict=True).prev_sample         
-        return denoised_latent, None
+        #  Denoised‑latent 
+        denoised_latent  = torch.stack([scheduler.step(eps_pred[i], ts[i], latents[i], return_dict=True).prev_sample
+            for i in range(B)])          
+        return denoised_latent
     
     @staticmethod
     def get_trainable_params(unet, vae):
@@ -309,7 +305,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
         return params_gen
 
 
-    # ==================================================Inference Code=============================================================
+    # =======================================================Inference Code=============================================================
 
     @staticmethod
     def forward_with_networks(x, vae_enc, unet, vae_dec, sched, timesteps, prompt_embeds, pooled_embeds, time_ids):
@@ -334,6 +330,7 @@ class ContrastiveSDXL_Turbo(nn.Module):
 
         B = latents.shape[0]
 
+
         ts = torch.full((B,), timesteps, device=latents.device, dtype=torch.long)
 
         noisy_lantent = latents
@@ -345,7 +342,10 @@ class ContrastiveSDXL_Turbo(nn.Module):
             ).sample
 
         #  Denoised‑latent pass 
-        denoised_latent  = sched.step(eps_pred, ts, noisy_lantent, return_dict=True).prev_sample  
+        denoised_latent = torch.stack([
+            sched.step(eps_pred[i], ts[i], noisy_lantent[i], return_dict=True).prev_sample
+            for i in range(B)
+        ])
         x_out = vae_dec(denoised_latent)                
 
         return x_out         
