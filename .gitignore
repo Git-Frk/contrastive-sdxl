@@ -1,67 +1,28 @@
-# ======================
-# Ignored Folders
-# ======================
-# Python bytecode cache
 __pycache__/
-# Generated outputs (e.g., inference results, images)
-outputs/
-# models and checkpoints
-output/
-# Backup or reference code versions
-pre-modified versions/
-# Large datasets or input data
-data/
-# WandB logs and metadata
-wandb/
-# Python virtual environments
-venv/ 
-.env/
-# Jupyter notebook checkpoints
-.ipynb_checkpoints/
-# test checkpoint folder
-misc/
-# custom VAE checkpoints
-models/vae/checkpoints
-# YOLO11 training dataset
-models/yolo11/datasets
-models/yolo11_det/datasets
-# YOLO11 run files
-models/yolo11_det/runs
-# ======================
-# Ignored Files
-# ======================
-# SLURM job output and scripts
-slurm-223652.out 
-submitjob.sh
-# Model checkpoints and weights
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+tests/
+.pytest_cache/
+!/.gitignore
 *.pt
 *.pth
 *.pkl
-# Logs and temporary files
-*.log 
-*.tmp 
-*.swp 
-*.bak
-# macOS system files
-.DS_Store
-# Jupyter notebooks to ignore
-debugger.ipynb
-# Python files
-inference_day2night.py
-# images
-test1.png
-test2.png
-.vscode/settings.json
-logs/error_265027.log
-logs/output_265027.log
-(zf)train_contrastive_sdxl.py
-logs/error_265515.log
-logs/output_265515.log
-inference_script.py
-.gitignore
-del_ckpts.py
-clean_outputs.py
-translate_images.py
-runs/detect/train/args.yaml
-runs/detect/train2/args.yaml
-yolo_loss_debug_temp.py
+/data/*
+!/data/.gitkeep
+/outputs/*
+!/outputs/.gitkeep
+!/outputs/checkpoints/
+/outputs/checkpoints/*
+!/outputs/checkpoints/yolo11/
+/outputs/checkpoints/yolo11/*
+!/outputs/checkpoints/yolo11/best.pt
+!/src/contrastive_sdxl/data/
+/docs/*
+!/docs/day2night_1.gif
+!/docs/day2night2.gif
+!/docs/day2night3.gif
+!/docs/day2night_4.gif
+!/docs/Contrastive-SDXL Infographic.jpg
